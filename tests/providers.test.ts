@@ -100,10 +100,12 @@ describe('阿里云 ACS3 签名与 Unicode 分段', () => {
 
   it('保护标记在请求长度边缘保持完整且不突破分片上限', () => {
     const marker = '[[YEBAN_KEEP_demo_0]]';
-    const text = 'a'.repeat(1597) + marker + 'Hello';
+    const formatMarker = '[[YEBAN_FMT_demo_0_OPEN]]';
+    const text = 'a'.repeat(1597) + marker + 'Hello' + 'b'.repeat(1597) + formatMarker + 'world';
     const chunks = splitText(text, 1600);
     expect(chunks.join('')).toBe(text);
     expect(chunks.some(chunk => chunk.includes(marker))).toBe(true);
+    expect(chunks.some(chunk => chunk.includes(formatMarker))).toBe(true);
     expect(chunks.every(chunk => Array.from(chunk).length <= 1600)).toBe(true);
   });
 
@@ -125,6 +127,21 @@ describe('阿里云 ACS3 签名与 Unicode 分段', () => {
     expect(call[1].redirect).toBe('error');
   });
 
+  it('多语请求向阿里机翻传递标准代码，并在百炼提示词中使用语言名称', async () => {
+    const aliyunFetcher = vi.fn(async () => new Response(JSON.stringify({ Code: '200', Data: { Translated: 'Bonjour' } })));
+    await translate(aliyun, { provider: 'aliyun', source: 'de', target: 'fr' }, 'Guten Tag', { signal: new AbortController().signal, fetcher: aliyunFetcher });
+    const aliyunCall = aliyunFetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const form = new URLSearchParams(String(aliyunCall[1].body));
+    expect(form.get('SourceLanguage')).toBe('de');
+    expect(form.get('TargetLanguage')).toBe('fr');
+
+    const bailianFetcher = vi.fn(async () => ok('안녕하세요'));
+    await translate(bailian, { provider: 'bailian', source: 'ja', target: 'ko' }, 'こんにちは', { signal: new AbortController().signal, fetcher: bailianFetcher });
+    const bailianCall = bailianFetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(bailianCall[1].body));
+    expect(body.messages[0].content).toContain('原文语言为日语，翻译为韩语');
+  });
+
   it('支持通用版官方示例的外层响应包装', () => {
     expect(parseAliyunResult({ TranslateGeneralResponse: { Code: 200, Data: { Translated: 'Hello' } } })).toBe('Hello');
   });
@@ -140,7 +157,7 @@ describe('文本调用与停止', () => {
     expect(beforeRequest).toHaveBeenCalledTimes(2);
     const call = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(String(call[1].body));
-    expect(body.messages[0].content).toContain('翻译为中文');
+    expect(body.messages[0].content).toContain('翻译为简体中文');
     expect(body.stream).toBe(false);
     expect(body.enable_thinking).toBe(false);
     expect(body.max_tokens).toBe(4096);

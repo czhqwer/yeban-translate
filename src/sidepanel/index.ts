@@ -1,15 +1,17 @@
 import '../ui/base.css';
-import { send, PROVIDER_NAMES, SELECTION_LIMIT, type Preferences, type PublicSettings, type TranslationSelection } from '../shared/types';
+import { send, SELECTION_LIMIT, type Preferences, type PublicSettings, type TranslationSelection } from '../shared/types';
+import { languageName } from '../shared/languages';
 import { defaultSelection, resolvePreferences } from '../shared/services';
 import { element, feedback } from '../ui/common';
+import { populateLanguageSelect } from '../ui/languages';
 import { RequestVersion, unicodeLength } from '../ui/state';
 import { PanelChannel } from './channel';
 
 interface TranslationSnapshot { preferences: Preferences; text: string; }
-const PANEL_PROVIDER_NAMES = { bailian: '百炼', aliyun: '阿里翻译' };
-const provider = element<HTMLSelectElement>('panel-provider');
 const source = element<HTMLSelectElement>('panel-source');
 const target = element<HTMLSelectElement>('panel-target');
+populateLanguageSelect(source, true);
+populateLanguageSelect(target, false);
 const textInput = element<HTMLTextAreaElement>('panel-input');
 const translateButton = element<HTMLButtonElement>('panel-translate');
 const stopButton = element<HTMLButtonElement>('panel-stop');
@@ -31,7 +33,7 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
 /** 侧栏选择只属于此侧栏，不通过保存设置改写全局偏好。 */
 function selection(): TranslationSelection {
-  return { provider: provider.value as TranslationSelection['provider'], source: source.value as TranslationSelection['source'], target: target.value as TranslationSelection['target'] };
+  return { provider: 'auto', source: source.value as TranslationSelection['source'], target: target.value as TranslationSelection['target'] };
 }
 
 /** 纯文本渲染结果与反馈，服务返回内容不能创建可执行节点。 */
@@ -40,7 +42,7 @@ function render(): void {
   const overLimit = count > SELECTION_LIMIT;
   const resolved = settings ? resolvePreferences(selection(), settings) : undefined;
   const accepted = Boolean(settings?.dataNoticeAccepted);
-  provider.disabled = source.disabled = target.disabled = busy || !settings;
+  source.disabled = target.disabled = busy || !settings;
   textInput.disabled = busy;
   translateButton.disabled = busy || !settings || !resolved || !accepted || !textInput.value.trim() || overLimit;
   translateButton.textContent = busy ? activeRequest ? '正在翻译…' : '准备翻译…' : '翻译文本';
@@ -54,15 +56,9 @@ function render(): void {
   textInput.setAttribute('aria-invalid', String(overLimit));
   element('panel-input-hint').hidden = !overLimit;
   element('panel-input-hint').textContent = overLimit ? `已超出 ${count - SELECTION_LIMIT} 个字符，请缩短后翻译。` : '';
-  // 自动选择与失败重试都展示实际服务；请求发出后不随当前选项变化。
-  const actual = activeRequest?.preferences ?? resolved;
-  const providerHint = element('panel-provider-hint');
-  providerHint.hidden = Boolean(actual) && provider.value !== 'auto' && provider.value === actual?.provider;
-  providerHint.textContent = !settings ? '读取中…' : !actual ? '未配置' : PANEL_PROVIDER_NAMES[actual.provider];
-  providerHint.title = actual ? PROVIDER_NAMES[actual.provider] : '请在设置中配置翻译服务';
   element('panel-setup').hidden = !settings || (accepted && Boolean(resolved));
   element('panel-setup-title').textContent = !accepted ? '先了解文本如何使用' : '先配置翻译服务';
-  element('panel-setup-detail').textContent = !accepted ? '请在设置页确认数据使用说明后开始翻译。' : provider.value === 'auto' ? '请先在设置中配置一个翻译服务。' : '请配置所选服务，或改选已配置的服务。';
+  element('panel-setup-detail').textContent = !accepted ? '请在设置页确认数据使用说明后开始翻译。' : '请先在设置中配置一个翻译服务。';
   output.textContent = translated;
   output.hidden = !translated;
   element('panel-empty').hidden = !busy || Boolean(translated);
@@ -70,8 +66,8 @@ function render(): void {
   element('panel-output').setAttribute('aria-busy', String(busy));
   const snapshot = resultSnapshot || failedSnapshot;
   element('panel-result-footer').hidden = !snapshot;
-  element('panel-result-meta').textContent = snapshot ? `${PANEL_PROVIDER_NAMES[snapshot.preferences.provider]} · ${snapshot.preferences.target === 'zh' ? '简体中文' : '英文'}` : '';
-  retryButton.title = failedSnapshot ? `沿用此次文本、${PROVIDER_NAMES[failedSnapshot.preferences.provider]}和目标语言重试` : '沿用此次文本和服务重试';
+  element('panel-result-meta').textContent = snapshot ? `翻译为 ${languageName(snapshot.preferences.target)}` : '';
+  retryButton.title = failedSnapshot ? `沿用此次文本和${languageName(failedSnapshot.preferences.target)}重试` : '沿用此次文本和目标语言重试';
 }
 
 /** 刷新公开配置；正在运行的翻译不因配置优先级变化而改换服务。 */
@@ -83,7 +79,6 @@ async function refreshSettings(initial = false): Promise<void> {
   settings = response.value;
   if (initial) {
     const chosen = defaultSelection(settings);
-    provider.value = chosen.provider;
     source.value = chosen.source;
     target.value = chosen.target;
   }
@@ -113,7 +108,7 @@ async function translate(snapshot?: TranslationSnapshot): Promise<void> {
   if (!preferences || !settings.services[preferences.provider].configured) {
     busy = false;
     failedSnapshot = snapshot;
-    feedback(message, snapshot ? '原服务配置已删除或不可用。请先恢复该配置，或开始一次新的翻译。' : '所选服务未配置，请打开设置或手动选择其他服务。', 'error');
+    feedback(message, snapshot ? '原服务配置已删除或不可用。请先恢复该配置，或开始一次新的翻译。' : '尚未配置可用的翻译服务，请打开设置。', 'error');
     render();
     return;
   }
@@ -168,7 +163,7 @@ textInput.addEventListener('input', () => {
   feedback(message, '');
   render();
 });
-for (const field of [provider, source, target]) field.addEventListener('change', () => {
+for (const field of [source, target]) field.addEventListener('change', () => {
   // 改选仅影响下一次翻译；失败快照仍保留以便按原条件重试。
   render();
 });

@@ -75,6 +75,27 @@ describe('划词按钮与结果窗定位', () => {
     expect(position()).toEqual({ left: 176, top: 82 });
   });
 
+  it('跨行并跨过加粗、链接和隐藏装饰节点时仍显示按钮，且不读取装饰文本', async () => {
+    document.body.innerHTML = '<p id="mixed">Every function and operator in Flink can be <strong>stateful</strong> (see <a href="#state">working with state<span aria-hidden="true">↗</span></a><svg aria-hidden="true"><text>DO_NOT_SEND</text></svg> for details). Stateful functions store data across the processing of individual elements/events, making state a critical building block.</p>';
+    selectionGeometry(lineRect(20, 60, 400, 44), [lineRect(175, 60, 325, 20), lineRect(20, 84, 150, 20)]);
+    await translator.setEnabled(true);
+    const paragraph = document.querySelector('#mixed')!;
+    const texts: Text[] = [];
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) texts.push(walker.currentNode as Text);
+    const startNode = texts.find(node => node.data.includes('operator in Flink'))!;
+    const endNode = texts.find(node => node.data.includes('individual elements/events'))!;
+    const range = document.createRange();
+    range.setStart(startNode, startNode.data.indexOf('operator in Flink'));
+    range.setEnd(endNode, endNode.data.indexOf('events,') + 'events,'.length);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    expect(readSelection(document.getSelection(), document)?.text).toBe('operator in Flink can be stateful (see working with state for details). Stateful functions store data across the processing of individual elements/events,');
+    paragraph.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await vi.waitFor(() => expect(panel()?.querySelector('.trigger')).toBeTruthy());
+    expect(position()).toEqual({ left: 176, top: 82 });
+  });
+
   it('反向选择与正向选择使用相同的文字末行锚点', async () => {
     selectionGeometry(lineRect(20, 60, 400, 44), [lineRect(20, 60, 400, 20), lineRect(20, 84, 150, 20)]);
     await translator.setEnabled(true);
@@ -184,12 +205,21 @@ describe('划词按钮与结果窗定位', () => {
 });
 
 describe('受保护选区', () => {
-  it('首尾为普通文本但中间含代码时拒绝整个选区', () => {
+  it('普通段落中的行内代码可以随相邻文本一起划词翻译', () => {
     document.body.innerHTML = '<p>Normal <code>protected</code> normal</p>';
     const paragraph = document.querySelector('p')!;
     const range = document.createRange();
     range.setStart(paragraph.firstChild!, 0);
     range.setEnd(paragraph.lastChild!, 7);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    expect(readSelection(document.getSelection(), document)?.text).toBe('Normal protected normal');
+  });
+
+  it('代码块仍然拒绝划词翻译', () => {
+    document.body.innerHTML = '<pre>const protectedValue = true;</pre>';
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('pre')!);
     document.getSelection()?.removeAllRanges();
     document.getSelection()?.addRange(range);
     expect(readSelection(document.getSelection(), document)).toBeNull();

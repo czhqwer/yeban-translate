@@ -1,8 +1,10 @@
 /** 页伴翻译的公开类型；此文件不包含真实服务配置。 */
+import type { LanguageCode, SourceLanguage } from './languages';
+
+export type { LanguageCode, SourceLanguage } from './languages';
 export type ProviderId = 'bailian' | 'aliyun';
 export type ProviderChoice = 'auto' | ProviderId;
-export type SourceLanguage = 'auto' | 'zh' | 'en';
-export type TargetLanguage = 'zh' | 'en';
+export type TargetLanguage = LanguageCode;
 export type TranslationMode = 'page' | 'selection';
 
 export interface Preferences {
@@ -129,7 +131,7 @@ export type ContentMessage =
   | { type: 'FEATURES_CHANGED' }
   | { type: 'SIDE_PANEL_STATE'; state: SidePanelState };
 
-export const DEFAULT_PREFERENCES: Preferences = { provider: 'bailian', source: 'auto', target: 'zh' };
+export const DEFAULT_PREFERENCES: Preferences = { provider: 'aliyun', source: 'auto', target: 'zh' };
 export const PROVIDER_NAMES: Record<ProviderId, string> = { bailian: '百炼大模型', aliyun: '阿里云机器翻译' };
 export const DEFAULT_SERVICES: Record<ProviderId, PublicService> = {
   bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', configured: false },

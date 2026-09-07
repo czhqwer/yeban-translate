@@ -1,4 +1,6 @@
 /** 正文与划词共用的 DOM 保护规则；页面内容始终作为不可信纯文本。 */
+import type { TargetLanguage } from '../shared/types';
+
 export const OWNED = 'data-yeban-owned';
 const BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td,th,dt,dd,figcaption,summary';
 const INLINE_BLOCKS = 'label,a';
@@ -6,6 +8,19 @@ const CONTAINERS = 'nav,aside';
 const ALL_BLOCKS = `${BLOCKS},${INLINE_BLOCKS},${CONTAINERS}`;
 const EXCLUDED = `input,textarea,select,option,button,pre,script,style,noscript,iframe,svg,canvas,object,embed,[${OWNED}],[contenteditable]:not([contenteditable="false"]),[role="textbox"],[hidden],[aria-hidden="true"]`;
 const PROTECTED = `${EXCLUDED},code`;
+const SELECTION_BLOCKED = `input,textarea,select,option,button,pre,script,style,noscript,iframe,canvas,object,embed,[${OWNED}],[contenteditable]:not([contenteditable="false"]),[role="textbox"]`;
+const SELECTION_IGNORED = `svg,[hidden],[aria-hidden="true"]`;
+const RICH_INLINE = 'a,abbr,b,bdi,bdo,cite,code,del,em,i,ins,kbd,mark,q,s,samp,small,span,strong,sub,sup,time,u,var';
+const MAX_INLINE_FORMATS = 20;
+const INLINE_STYLE_PROPERTIES = [
+  'color', 'font-family', 'font-size', 'font-style', 'font-weight', 'font-stretch', 'font-variant',
+  'font-feature-settings', 'font-kerning', 'font-optical-sizing', 'font-variation-settings', 'line-height',
+  'letter-spacing', 'word-spacing', 'text-decoration', 'text-transform', 'text-shadow', 'white-space',
+  'word-break', 'overflow-wrap', 'vertical-align', 'background-color', 'border-top-color', 'border-top-style',
+  'border-top-width', 'border-right-color', 'border-right-style', 'border-right-width', 'border-bottom-color',
+  'border-bottom-style', 'border-bottom-width', 'border-left-color', 'border-left-style', 'border-left-width',
+  'border-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'
+] as const;
 
 /** 只识别计算样式能够证明零面积的裁剪，不根据 sr-only 等类名推断。 */
 function isFullyClipped(style: CSSStyleDeclaration): boolean {
@@ -72,12 +87,22 @@ export function extractParagraphs(doc: Document, root?: Element): HTMLElement[] 
 export function normalizeText(text: string): string { return text.replace(/\s+/gu, ' ').trim(); }
 
 export interface ParagraphLiteral { placeholder: string; value: string }
-export interface ParagraphSnapshot { text: string; naturalText: string; literals: ParagraphLiteral[]; signature: string }
+export interface ParagraphFormat {
+  open: string;
+  close: string;
+  tag: string;
+  href?: string;
+  title?: string;
+  styles: Array<[string, string]>;
+}
+export interface ParagraphSnapshot { text: string; naturalText: string; literals: ParagraphLiteral[]; formats: ParagraphFormat[]; signature: string }
 
 /** 隐藏内容与代码块完全排除；行内代码仅以稳定占位符参与自然语言翻译。 */
 export function readParagraphSnapshot(element: Element): ParagraphSnapshot {
-  const fragments: Array<string | { value: string }> = [];
+  type Fragment = string | { kind: 'literal'; value: string } | { kind: 'format'; index: number; edge: 'open' | 'close' };
+  const fragments: Fragment[] = [];
   const natural: string[] = [];
+  const formatSources: Array<{ tag: string; href?: string; title?: string; styles: Array<[string, string]> }> = [];
   const container = element.matches(CONTAINERS);
   const literalText = (node: Node): string => {
     if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
@@ -87,28 +112,53 @@ export function readParagraphSnapshot(element: Element): ParagraphSnapshot {
     if (child.tagName === 'BR') return ' ';
     return [...child.childNodes].map(literalText).join('');
   };
+  const formatSource = (child: Element): typeof formatSources[number] => {
+    const computed = child.ownerDocument.defaultView?.getComputedStyle(child);
+    const styles = computed ? INLINE_STYLE_PROPERTIES
+      .map(property => [property, computed.getPropertyValue(property)] as [string, string])
+      .filter(([, value]) => Boolean(value)) : [];
+    const tag = child.matches(RICH_INLINE) ? child.tagName.toLowerCase() : 'span';
+    const href = child.tagName === 'A' ? child.getAttribute('href') ?? undefined : undefined;
+    const title = child.matches('abbr,q,time') ? child.getAttribute('title') ?? undefined : undefined;
+    return { tag, ...(href ? { href } : {}), ...(title ? { title } : {}), styles };
+  };
   const visit = (node: Node): void => {
     if (node.nodeType === Node.TEXT_NODE) { const value = node.nodeValue ?? ''; fragments.push(value); natural.push(value); return; }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const child = node as Element;
     if (child.matches(EXCLUDED) || isHidden(child)) return;
     if (child !== element && (child.matches(BLOCKS) || child.matches('ul,ol') || container && child.matches(`${INLINE_BLOCKS},${CONTAINERS}`))) return;
-    if (child.tagName === 'CODE') { const value = literalText(child); if (value) fragments.push({ value }); return; }
     if (child.tagName === 'BR') { fragments.push(' '); natural.push(' '); return; }
-    for (const descendant of child.childNodes) visit(descendant);
+    const preserve = child !== element && formatSources.length < MAX_INLINE_FORMATS && child.matches(RICH_INLINE) && Boolean(normalizeText(literalText(child)));
+    const formatIndex = preserve ? formatSources.push(formatSource(child)) - 1 : -1;
+    if (preserve) fragments.push({ kind: 'format', index: formatIndex, edge: 'open' });
+    if (child.tagName === 'CODE') {
+      const value = literalText(child);
+      if (value) fragments.push({ kind: 'literal', value });
+    } else {
+      for (const descendant of child.childNodes) visit(descendant);
+    }
+    if (preserve) fragments.push({ kind: 'format', index: formatIndex, edge: 'close' });
   };
   if (!isProtected(element)) visit(element);
-  const allText = fragments.map(fragment => typeof fragment === 'string' ? fragment : fragment.value).join('');
+  const allText = fragments.map(fragment => typeof fragment === 'string' ? fragment : fragment.kind === 'literal' ? fragment.value : '').join('');
   let salt = 0;
-  while (allText.includes(`[[YEBAN_KEEP_${salt}_`)) salt++;
+  while (allText.includes(`[[YEBAN_KEEP_${salt}_`) || allText.includes(`[[YEBAN_FMT_${salt}_`)) salt++;
   const literals: ParagraphLiteral[] = [];
+  const formats: ParagraphFormat[] = formatSources.map((source, index) => ({
+    ...source,
+    open: `[[YEBAN_FMT_${salt}_${index}_OPEN]]`,
+    close: `[[YEBAN_FMT_${salt}_${index}_CLOSE]]`,
+  }));
   const text = normalizeText(fragments.map(fragment => {
     if (typeof fragment === 'string') return fragment;
+    if (fragment.kind === 'format') return formats[fragment.index][fragment.edge];
     const placeholder = `[[YEBAN_KEEP_${salt}_${literals.length}]]`;
     literals.push({ placeholder, value: fragment.value });
     return placeholder;
   }).join(''));
-  return { text, naturalText: normalizeText(natural.join('')), literals, signature: JSON.stringify([text, literals]) };
+  const formatSignature = formats.map(({ open, close, tag, href, title, styles }) => ({ open, close, tag, href, title, styles }));
+  return { text, naturalText: normalizeText(natural.join('')), literals, formats, signature: JSON.stringify([text, literals, formatSignature]) };
 }
 
 /** 正文提取与校验共享过滤和换行规则。 */
@@ -167,7 +217,7 @@ export function insertParagraphTranslation(node: HTMLElement, translation: HTMLE
 export function splitText(text: string, limit = 1800): string[] {
   if (limit < 1) return [];
   const chars = Array.from(text);
-  const markers = [...text.matchAll(/\[\[YEBAN_KEEP_\d+_\d+\]\]/gu)].map(match => {
+  const markers = [...text.matchAll(/\[\[YEBAN_(?:KEEP_\d+_\d+|FMT_\d+_\d+_(?:OPEN|CLOSE))\]\]/gu)].map(match => {
     const start = Array.from(text.slice(0, match.index)).length;
     return { start, end: start + match[0].length };
   });
@@ -179,7 +229,7 @@ export function splitText(text: string, limit = 1800): string[] {
       for (let i = end - 1; i > offset + Math.floor(limit / 2); i--) {
         if (/[。！？.!?\n]/u.test(chars[i])) { end = i + 1; break; }
       }
-      // 保留行内代码占位符的完整边界，不能将它拆入两个独立请求。
+      // 保留代码与富文本标记的完整边界，不能将一个标记拆入两个独立请求。
       const marker = markers.find(span => span.start < end && span.end > end);
       if (marker && marker.start > offset) end = marker.start;
     }
@@ -190,11 +240,12 @@ export function splitText(text: string, limit = 1800): string[] {
 }
 
 /** 明确为同语种时跳过；混合文本保守交给所选服务判断。 */
-export function isSameLanguage(text: string, target: 'zh' | 'en'): boolean {
+export function isSameLanguage(text: string, target: TargetLanguage): boolean {
   const han = /\p{Script=Han}/u.test(text);
   const latin = /[a-z]/iu.test(text);
   if (target === 'zh') return han && !latin && !/[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text);
-  // 拉丁字母并不等于英语；只有具备明确英语结构时才跳过自动识别。
+  if (target !== 'en') return false;
+  // 拉丁字母并不等于英语；只有具备明确英语结构时才跳过自动识别。其他语言保守交给服务判断。
   const englishMarkers = text.toLowerCase().match(/\b(the|this|that|these|those|is|are|was|were|with|your|you|have|has)\b/gu) ?? [];
   return latin && !han && englishMarkers.length >= 2 && !/[^\p{Script=Latin}\p{N}\p{P}\p{S}\s]/u.test(text);
 }
@@ -207,27 +258,49 @@ export function isInViewport(node: Element | Range): boolean {
 
 export interface SelectionSnapshot { text: string; range: Range; documentUrl: string }
 
-/** 检查整个选区，防止首尾正常但中间穿过代码或输入区域。 */
-export function readSelection(selection: Selection | null, doc: Document): SelectionSnapshot | null {
-  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
-  const range = selection.getRangeAt(0);
-  if (!range.startContainer.isConnected || !range.endContainer.isConnected || isProtected(range.startContainer) || isProtected(range.endContainer)) return null;
+/**
+ * 按 Range 实际覆盖的文本节点重建可发送文本。
+ * 隐藏节点与 SVG 装饰直接跳过；真正覆盖代码块、输入区等交互内容时仍拒绝整个选区。
+ * 普通段落中的行内 code 是正文的一部分，允许和相邻文字一起翻译。
+ */
+function readRangeText(range: Range, doc: Document): string | null {
   const common = range.commonAncestorContainer;
   const root = common.nodeType === Node.ELEMENT_NODE ? common as Element : common.parentElement;
   if (!root) return null;
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  const fragments: string[] = [];
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Node | null = walker.nextNode();
   while (node) {
-    if (range.intersectsNode(node) && isProtected(node)) return null;
+    const textNode = node as Text;
+    if (range.intersectsNode(textNode)) {
+      const start = textNode === range.startContainer ? range.startOffset : 0;
+      const end = textNode === range.endContainer ? range.endOffset : textNode.length;
+      if (start < end) {
+        const element = textNode.parentElement;
+        if (!element) return null;
+        if (!element.closest(SELECTION_IGNORED) && !isHidden(element)) {
+          if (element.closest(SELECTION_BLOCKED)) return null;
+          fragments.push(textNode.data.slice(start, end));
+        }
+      }
+    }
     node = walker.nextNode();
   }
-  const text = selection.toString().trim();
+  return fragments.join('').trim() || null;
+}
+
+/** 检查整个选区，过滤装饰文本，并防止首尾正常但中间穿过代码或输入区域。 */
+export function readSelection(selection: Selection | null, doc: Document): SelectionSnapshot | null {
+  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  if (!range.startContainer.isConnected || !range.endContainer.isConnected) return null;
+  const text = readRangeText(range, doc);
   return text ? { text, range: range.cloneRange(), documentUrl: doc.URL } : null;
 }
 
 /** DOM 原文和文档仍匹配时才展示异步结果。 */
 export function selectionUnchanged(snapshot: SelectionSnapshot, doc: Document): boolean {
-  return doc.URL === snapshot.documentUrl && snapshot.range.startContainer.isConnected && snapshot.range.endContainer.isConnected && snapshot.range.toString().trim() === snapshot.text;
+  return doc.URL === snapshot.documentUrl && snapshot.range.startContainer.isConnected && snapshot.range.endContainer.isConnected && readRangeText(snapshot.range, doc) === snapshot.text;
 }
 
 /** 封闭 ShadowRoot 隔离站点样式；所有文本由 textContent 写入。 */

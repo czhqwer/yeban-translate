@@ -3,10 +3,11 @@ import type { BackgroundMessage, ContentMessage, PageContext, Preferences, Provi
 import { cancelled, failure, invalid, TranslationError } from './errors';
 import { isConfigured, mergeService, translate, type ServiceConfig } from './providers';
 import { RequestPool } from './pool';
-import { normalizePriority, resolveProvider } from '../shared/services';
+import { DEFAULT_PRIORITY, normalizePriority, resolveProvider } from '../shared/services';
 import { PANEL_PORT_NAME, type PanelCommand, type PanelResponse } from '../shared/panel';
 import { SidePanelManager } from './side-panel-state';
 import { FloatingPositionStore } from './floating-position';
+import { isLanguageCode, isSourceLanguage } from '../shared/languages';
 
 interface StoredSettings {
   preferences: Preferences;
@@ -32,7 +33,7 @@ interface PendingResult { text: string; promise: Promise<{ translated: string }>
 interface PanelRequest { name: string; ownerId: string; id: string; provider: ProviderId; version: number; text: string; stopped: boolean; promise: Promise<{ translated: string }> }
 const STORE = 'yebanSettings';
 const CONTROL = 'yebanControl';
-const providers: ProviderId[] = ['bailian', 'aliyun'];
+const providers: ProviderId[] = [...DEFAULT_PRIORITY];
 const ALL_SITES = ['http://*/*', 'https://*/*'];
 const ALL_REGISTRATION = 'yeban-all-sites';
 
@@ -43,7 +44,7 @@ function provider(value: unknown): ProviderId {
 function preferences(value: unknown): Preferences {
   if (!value || typeof value !== 'object') invalid();
   const input = value as Preferences;
-  if (!['auto', 'zh', 'en'].includes(input.source) || !['zh', 'en'].includes(input.target)) invalid('请选择支持的中英语言选项。');
+  if (!isSourceLanguage(input.source) || !isLanguageCode(input.target)) invalid('请选择支持的语言选项。');
   return { provider: provider(input.provider), source: input.source, target: input.target };
 }
 function mode(value: unknown): TranslationMode {
@@ -105,7 +106,7 @@ export class BackgroundApp {
     this.settings = stored ?? { preferences: { ...DEFAULT_PREFERENCES }, services: {
       bailian: { endpoint: DEFAULT_SERVICES.bailian.endpoint, model: DEFAULT_SERVICES.bailian.model, version: 0 },
       aliyun: { endpoint: DEFAULT_SERVICES.aliyun.endpoint, version: 0 },
-    }, sites: [], dataNoticeAccepted: false, providerPriority: ['bailian', 'aliyun'], selectionEnabled: true, allSitesEnabled: false, blockedSites: [] };
+    }, sites: [], dataNoticeAccepted: false, providerPriority: [...DEFAULT_PRIORITY], selectionEnabled: true, allSitesEnabled: false, blockedSites: [] };
     this.settings.providerPriority = normalizePriority(stored?.providerPriority, stored?.preferences.provider);
     this.settings.selectionEnabled = stored?.selectionEnabled !== false;
     this.settings.allSitesEnabled = stored?.allSitesEnabled === true;
@@ -584,7 +585,6 @@ export class BackgroundApp {
   }
 
   private async testService(id: ProviderId): Promise<{ translated: string }> {
-    if (!this.settings.dataNoticeAccepted) throw new TranslationError('CONSENT', '请先确认文本发送说明，再测试连接。');
     const config = { ...this.settings.services[id] };
     if (!isConfigured(id, config)) throw new TranslationError('CONFIG', '请先保存当前服务配置。');
     const name = `${id}/${crypto.randomUUID()}`;
@@ -595,7 +595,7 @@ export class BackgroundApp {
         const abort = () => controller.abort();
         signal.addEventListener('abort', abort, { once: true });
         const check = async () => {
-          if (controller.signal.aborted || this.settings.services[id].version !== config.version || !this.settings.dataNoticeAccepted) throw cancelled();
+          if (controller.signal.aborted || this.settings.services[id].version !== config.version) throw cancelled();
           if (this.controls.cooldown[id] > Date.now()) throw new TranslationError('RATE_LIMIT', '服务正在冷却，请稍后重试。', true);
         };
         try {

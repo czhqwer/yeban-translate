@@ -1,20 +1,36 @@
 import '../ui/base.css';
 import { send, PROVIDER_NAMES, type Preferences, type ProviderId, type PublicSettings, type ServiceInput } from '../shared/types';
-import { normalizePriority, resolveProvider } from '../shared/services';
+import { DEFAULT_PRIORITY, normalizePriority, resolveProvider } from '../shared/services';
 import { element, feedback, validEndpoint } from '../ui/common';
 import { websiteFeatures } from '../ui/state';
 import { initializeServiceHelp } from './help';
+import { populateLanguageSelect } from '../ui/languages';
 
-const providers: ProviderId[] = ['bailian', 'aliyun'];
+const providers: ProviderId[] = [...DEFAULT_PRIORITY];
 const globalFeedback = element('global-feedback');
 const defaultSource = element<HTMLSelectElement>('default-source');
 const defaultTarget = element<HTMLSelectElement>('default-target');
+populateLanguageSelect(defaultSource, true);
+populateLanguageSelect(defaultTarget, false);
 let settings: PublicSettings | undefined;
 let busy = false;
-let priority: ProviderId[] = ['bailian', 'aliyun'];
+let priority: ProviderId[] = [...DEFAULT_PRIORITY];
 let priorityEdited = false;
 let renderedNoticeAccepted: boolean | undefined;
 
+/** 配置卡片与默认优先级保持一致，序号同时按当前默认顺序展示。 */
+function orderProviderForms(): void {
+  const stack = document.querySelector<HTMLElement>('.provider-stack');
+  if (!stack) return;
+  providers.forEach((provider, index) => {
+    const form = element<HTMLFormElement>(`${provider}-form`);
+    const marker = form.querySelector<HTMLElement>('.provider-index');
+    if (marker) marker.textContent = String(index + 1).padStart(2, '0');
+    stack.append(form);
+  });
+}
+
+orderProviderForms();
 initializeServiceHelp();
 
 /** 敏感输入只由当前表单直接读取，不放入公开设置或状态。 */

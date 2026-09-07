@@ -2,6 +2,7 @@ import { PROVIDER_NAMES, SELECTION_LIMIT, send, type PageContext, type Preferenc
 import { resolvePreferences } from '../shared/services';
 import { createHost, isInViewport, OWNED, readSelection, selectionUnchanged, type SelectionSnapshot } from './dom';
 import { createIcon } from './icons';
+import { languageName } from '../shared/languages';
 
 interface SelectionTask { generation: number; snapshot: SelectionSnapshot; preferences?: Preferences; jobId?: string; translated?: string; running: boolean }
 
@@ -180,7 +181,7 @@ export class SelectionTranslator {
     title.textContent = '页伴翻译';
     header.append(title, this.button('关闭', () => { void this.close(); }));
     this.panel!.append(header);
-    if (task.preferences) this.appendText(`${PROVIDER_NAMES[task.preferences.provider]} · ${task.preferences.target === 'zh' ? '简体中文' : '英语'}`, 'meta');
+    if (task.preferences) this.appendText(`${PROVIDER_NAMES[task.preferences.provider]} · ${languageName(task.preferences.target)}`, 'meta');
     this.appendText(task.snapshot.text, 'text original');
     this.appendText(message ?? task.translated ?? '', 'text result');
     if (!message && task.translated) {

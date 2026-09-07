@@ -103,8 +103,8 @@ async function load(name: 'sidepanel' | 'options' | 'popup'): Promise<void> {
   if (name === 'sidepanel') await import('../src/sidepanel/index');
   else if (name === 'options') await import('../src/options/index');
   else await import('../src/popup/index');
-  if (name === 'popup') await vi.waitFor(() => expect(node('provider-hint').textContent).not.toContain('正在读取'));
-  else await vi.waitFor(() => expect(node<HTMLSelectElement>(name === 'sidepanel' ? 'panel-provider' : 'default-source').disabled).toBe(false));
+  if (name === 'popup') await vi.waitFor(() => expect(document.body.dataset.ready).toBe('true'));
+  else await vi.waitFor(() => expect(node<HTMLSelectElement>(name === 'sidepanel' ? 'panel-source' : 'default-source').disabled).toBe(false));
 }
 
 describe('侧栏翻译交互', () => {
@@ -228,7 +228,7 @@ describe('侧栏翻译交互', () => {
     typeText('😀'.repeat(2000));
     expect(node('panel-count').textContent).toBe('2000 / 2000 字符');
     expect(node<HTMLButtonElement>('panel-translate').disabled).toBe(false);
-    expect(node('panel-provider-hint').textContent).toContain('阿里翻译');
+    expect(document.getElementById('panel-provider')).toBeNull();
     typeText('😀'.repeat(2001));
     expect(node<HTMLButtonElement>('panel-translate').disabled).toBe(true);
     node('panel-translate').click();
@@ -238,14 +238,14 @@ describe('侧栏翻译交互', () => {
 });
 
 describe('优先级和网站授权界面', () => {
-  it('弹窗只改语言仍保留自动意图，新任务读取最新顺序并固定实际服务', async () => {
+  it('弹窗不显示服务选择器，只改语言并按最新优先级固定实际服务', async () => {
     await load('popup');
-    expect(node<HTMLSelectElement>('provider').value).toBe('auto');
+    expect(document.getElementById('provider')).toBeNull();
+    expect(document.getElementById('provider-hint')).toBeNull();
     node<HTMLSelectElement>('target').value = 'en';
     node('target').dispatchEvent(new Event('change'));
     await vi.waitFor(() => expect(pageRequest.mock.calls.some(([, message]) => message.type === 'SET_SELECTION')).toBe(true));
-    await vi.waitFor(() => expect(node<HTMLSelectElement>('provider').disabled).toBe(false));
-    expect(node<HTMLSelectElement>('provider').value).toBe('auto');
+    await vi.waitFor(() => expect(node<HTMLSelectElement>('source').disabled).toBe(false));
     settings.providerPriority = ['aliyun', 'bailian'];
     node('start').click();
     await vi.waitFor(() => expect(pageRequest.mock.calls.some(([, message]) => message.type === 'PAGE_START')).toBe(true));
@@ -255,9 +255,22 @@ describe('优先级和网站授权界面', () => {
     expect(request.mock.calls.some(([value]) => value.type === 'SAVE_SETTINGS')).toBe(false);
   });
 
+  it('没有可用服务时在状态区引导打开设置，不恢复冗余选择器', async () => {
+    settings.services.bailian.configured = false;
+    settings.services.aliyun.configured = false;
+    await load('popup');
+    expect(document.getElementById('provider')).toBeNull();
+    expect(node('status-title').textContent).toBe('尚未配置翻译服务');
+    expect(node('status-detail').textContent).toContain('右上角设置');
+    expect(node<HTMLButtonElement>('start').disabled).toBe(true);
+  });
+
   it('调整顺序与保存语言不会将自动意图改为显式服务', async () => {
     settings.services.bailian.configured = false;
     await load('options');
+    expect([...document.querySelectorAll('.provider-stack > form')].map(form => form.id)).toEqual(['aliyun-form', 'bailian-form']);
+    expect(node('aliyun-form').querySelector('.provider-index')?.textContent).toBe('01');
+    expect(node('bailian-form').querySelector('.provider-index')?.textContent).toBe('02');
     expect(node('priority-summary').textContent).toContain('阿里云机器翻译');
     (document.querySelector('[aria-label="上移阿里云机器翻译"]') as HTMLButtonElement).click();
     node<HTMLSelectElement>('default-target').value = 'en';

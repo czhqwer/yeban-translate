@@ -1,6 +1,6 @@
 import type { PageContext, Preferences, ProviderChoice, ProviderId, PublicService, PublicSettings, TranslationSelection } from './types';
 
-export const DEFAULT_PRIORITY: ProviderId[] = ['bailian', 'aliyun'];
+export const DEFAULT_PRIORITY: ProviderId[] = ['aliyun', 'bailian'];
 type AvailableServices = Record<ProviderId, PublicService>;
 type ServiceState = Pick<PublicSettings | PageContext, 'preferences' | 'services' | 'providerPriority'>;
 

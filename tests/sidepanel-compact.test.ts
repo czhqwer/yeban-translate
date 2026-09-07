@@ -36,7 +36,7 @@ async function load(): Promise<void> {
   const html = readFileSync(resolve(process.cwd(), 'sidepanel.html'), 'utf8');
   document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
   await import('../src/sidepanel/index');
-  await vi.waitFor(() => expect(node<HTMLSelectElement>('panel-provider').disabled).toBe(false));
+  await vi.waitFor(() => expect(node<HTMLSelectElement>('panel-source').disabled).toBe(false));
 }
 
 function node<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -63,28 +63,23 @@ describe('侧栏精简后的必要反馈', () => {
     expect(node<HTMLButtonElement>('panel-translate').disabled).toBe(false);
   });
 
-  it('自动选择显示实际服务短名，手动选择未配置服务仍禁止发送并展示设置入口', async () => {
+  it('只保留语言选择，并始终按设置中的优先级自动选择可用服务', async () => {
     settings.services.bailian.configured = false;
     await load();
-    expect(node('panel-provider-hint').textContent).toBe('阿里翻译');
-    expect(node('panel-provider-hint').title).toBe('阿里云机器翻译');
-    const provider = node<HTMLSelectElement>('panel-provider');
-    provider.value = 'bailian';
-    provider.dispatchEvent(new Event('change'));
+    expect(document.getElementById('panel-provider')).toBeNull();
+    expect(document.getElementById('panel-provider-hint')).toBeNull();
+    expect(node<HTMLSelectElement>('panel-source').options).toHaveLength(17);
+    expect(node<HTMLSelectElement>('panel-target').options).toHaveLength(16);
+    node<HTMLSelectElement>('panel-target').value = 'ja';
+    node('panel-target').dispatchEvent(new Event('change'));
     typeText('A short sentence');
-    expect(node('panel-provider-hint').textContent).toBe('未配置');
-    expect(node('panel-setup').hidden).toBe(false);
-    expect(node<HTMLButtonElement>('panel-translate').disabled).toBe(true);
-    provider.value = 'aliyun';
-    provider.dispatchEvent(new Event('change'));
-    expect(node('panel-provider-hint').hidden).toBe(true);
     expect(node('panel-setup').hidden).toBe(true);
     node('panel-translate').click();
     await vi.waitFor(() => expect(pending).toHaveLength(1));
-    expect(pending[0].message.preferences.provider).toBe('aliyun');
+    expect(pending[0].message.preferences).toEqual({ provider: 'aliyun', source: 'auto', target: 'ja' });
   });
 
-  it('失败重试仍展示旧任务的实际服务，完成后保留译文和简短来源，不重复成功提示', async () => {
+  it('失败重试保留旧任务语言和实际服务，完成后只展示目标语言', async () => {
     settings.providerPriority = ['aliyun', 'bailian'];
     await load();
     typeText('Preserve the retry provider');
@@ -92,18 +87,15 @@ describe('侧栏精简后的必要反馈', () => {
     await vi.waitFor(() => expect(pending).toHaveLength(1));
     pending[0].finish({ ok: false, error: { code: 'TIMEOUT', message: '请求超时。', retryable: true } });
     await vi.waitFor(() => expect(node('panel-retry').hidden).toBe(false));
-    expect(node('panel-result-meta').textContent).toBe('阿里翻译 · 简体中文');
-    const provider = node<HTMLSelectElement>('panel-provider');
-    provider.value = 'bailian';
-    provider.dispatchEvent(new Event('change'));
+    expect(node('panel-result-meta').textContent).toBe('翻译为 简体中文');
+    node<HTMLSelectElement>('panel-target').value = 'fr';
+    node('panel-target').dispatchEvent(new Event('change'));
     node('panel-retry').click();
     await vi.waitFor(() => expect(pending).toHaveLength(2));
-    expect(node('panel-provider-hint').hidden).toBe(false);
-    expect(node('panel-provider-hint').textContent).toBe('阿里翻译');
     expect(pending[1].message.preferences).toEqual(pending[0].message.preferences);
     pending[1].finish({ ok: true, value: { translated: '保留原来的翻译服务' } });
     await vi.waitFor(() => expect(node('panel-translated').textContent).toBe('保留原来的翻译服务'));
-    expect(node('panel-result-meta').textContent).toBe('阿里翻译 · 简体中文');
+    expect(node('panel-result-meta').textContent).toBe('翻译为 简体中文');
     expect(node('panel-result-footer').hidden).toBe(false);
     expect(node('panel-feedback').hidden).toBe(true);
     expect(node('panel-retry').hidden).toBe(true);

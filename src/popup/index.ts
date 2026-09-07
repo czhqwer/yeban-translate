@@ -1,12 +1,14 @@
 import '../ui/base.css';
-import { send, PROVIDER_NAMES, type ContentMessage, type PageStatus, type TranslationSelection, type PublicSettings, type Reply, type SidePanelState } from '../shared/types';
+import { send, type ContentMessage, type PageStatus, type TranslationSelection, type PublicSettings, type Reply, type SidePanelState } from '../shared/types';
 import { defaultSelection, resolvePreferences } from '../shared/services';
 import { element, feedback } from '../ui/common';
 import { websiteFeatures } from '../ui/state';
+import { populateLanguageSelect } from '../ui/languages';
 
-const provider = element<HTMLSelectElement>('provider');
 const source = element<HTMLSelectElement>('source');
 const target = element<HTMLSelectElement>('target');
+populateLanguageSelect(source, true);
+populateLanguageSelect(target, false);
 const start = element<HTMLButtonElement>('start');
 const stop = element<HTMLButtonElement>('stop');
 const restore = element<HTMLButtonElement>('restore');
@@ -31,9 +33,9 @@ let disposed = false;
 let pageStatus: PageStatus = { state: 'idle', completed: 0, failed: 0, pending: 0 };
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-/** 当前选择仅作用于本页；默认偏好在设置页单独保存。 */
+/** 弹窗只调整当前页语言；服务始终按设置页的最新优先级自动选择。 */
 function selection(): TranslationSelection {
-  return { provider: provider.value as TranslationSelection['provider'], source: source.value as TranslationSelection['source'], target: target.value as TranslationSelection['target'] };
+  return { provider: 'auto', source: source.value as TranslationSelection['source'], target: target.value as TranslationSelection['target'] };
 }
 
 /** 本页快照优先于全局默认值，重开弹窗仍展示当前任务实际使用的设置。 */
@@ -46,7 +48,6 @@ function applyStatus(status: PageStatus): void {
   lastActionError = actionError;
   lastActionMessage = status.actionError?.message ?? '';
   if (status.selection) {
-    provider.value = status.selection.provider;
     source.value = status.selection.source;
     target.value = status.selection.target;
   } else if (status.preferences) {
@@ -105,7 +106,7 @@ function render(): void {
   const features = settings ? websiteFeatures(settings, origin) : { authorized: false, selection: false, floating: false };
   const enabled = features.authorized;
   const available = Boolean(origin && tabId !== undefined && pageStatus.state !== 'unavailable');
-  provider.disabled = source.disabled = target.disabled = busy || !settings || running;
+  source.disabled = target.disabled = busy || !settings || running;
   start.disabled = busy || !settings || !available || !ready || !accepted || running;
   stop.disabled = busy || !available || !running;
   restore.disabled = busy || !available || (!running && pageStatus.completed === 0 && pageStatus.failed === 0 && !enabled);
@@ -118,14 +119,14 @@ function render(): void {
   start.textContent = running ? '网页翻译已开启' : pageStatus.state === 'stopped' ? '继续翻译当前页面' : '翻译当前页面';
   siteToggle.textContent = enabled ? '停用此网站' : '在此网站启用划词';
   element('site-host').textContent = origin ? `${new URL(origin).host}${features.selection ? ' · 划词已启用' : enabled ? ' · 浮球已启用' : ''}` : '当前页面不支持';
-  const actual = running && pageStatus.preferences ? pageStatus.preferences : resolved;
-  element('provider-hint').textContent = !settings ? '正在读取服务配置…' : running && actual ? `当前任务：${PROVIDER_NAMES[actual.provider]}；停止后可更改。` : !ready ? provider.value === 'auto' ? '还没有已配置的服务，请先打开设置。' : '此服务尚未配置，手动选择不会自动替换。' : `本次生效：${PROVIDER_NAMES[resolved!.provider]}${provider.value === 'auto' ? ' · 按优先级选择' : ''}`;
   element('site-feature-hint').textContent = settings?.selectionEnabled === false ? '划词功能已关闭；网站授权仍可用于悬浮球。可在设置中开启划词。' : features.selection ? '选中文字后，点击翻译按钮才会发送请求。' : '划词功能已开启；此网站仍需访问授权才能使用。';
   element('all-sites-guide').hidden = !settings || (settings.allSitesEnabled === true && settings.allSitesGranted === true);
   const titles: Record<PageStatus['state'], string> = { idle: '准备好，读下一页', running: '正在分批翻译已展开文字', waiting: '当前已展开内容已完成', partial: '部分段落翻译失败', stopped: '翻译已停止', unavailable: '当前页面不支持' };
-  element('status-title').textContent = titles[pageStatus.state];
-  element('status-dot').dataset.state = pageStatus.state;
+  const missingService = Boolean(settings && !ready && !running && pageStatus.state !== 'unavailable');
+  element('status-title').textContent = missingService ? '尚未配置翻译服务' : titles[pageStatus.state];
+  element('status-dot').dataset.state = missingService ? 'unavailable' : pageStatus.state;
   let detail = pageStatus.message || '点击开始后，将分批翻译页面当前已展开的文字。';
+  if (missingService) detail = '请点击右上角设置，配置服务并调整使用优先级。';
   if (!pageStatus.message && pageStatus.state === 'running') detail = '正在分批翻译页面已展开文字，无需滚动触发。';
   if (!pageStatus.message && pageStatus.state === 'waiting') detail = '展开菜单或折叠内容后，会继续补译新显示的文字。';
   if (!pageStatus.message && pageStatus.state === 'stopped') detail = '已完成译文保留，已提交请求仍可能计入用量。';
@@ -177,7 +178,7 @@ start.addEventListener('click', () => void perform(async () => {
   if (!settings?.dataNoticeAccepted) { feedback(actionFeedback, '请先确认文本发送说明。', 'error'); return; }
   const resolved = resolvePreferences(chosen, settings);
   if (!resolved) {
-    feedback(actionFeedback, chosen.provider === 'auto' ? '还没有可用服务，请先在设置中配置。' : '所选服务未配置，请配置该服务或手动改选。', 'error');
+    feedback(actionFeedback, '还没有可用服务，请先在设置中配置。', 'error');
     return;
   }
   if (!await ensureContent()) return;
@@ -186,7 +187,7 @@ start.addEventListener('click', () => void perform(async () => {
 stop.addEventListener('click', () => void perform(() => control({ type: 'PAGE_STOP' })));
 restore.addEventListener('click', () => void perform(() => control({ type: 'RESTORE' })));
 retry.addEventListener('click', () => void perform(() => control({ type: 'PAGE_RETRY' })));
-for (const field of [provider, source, target]) field.addEventListener('change', () => {
+for (const field of [source, target]) field.addEventListener('change', () => {
   const selected = selection();
   if (busy || !settings || !origin) return;
   void perform(async () => {
@@ -216,7 +217,7 @@ acceptNotice.addEventListener('click', () => void perform(async () => {
   const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', dataNoticeAccepted: true });
   if (!response.ok) { feedback(actionFeedback, response.error.message, 'error'); return; }
   settings = response.value;
-  feedback(actionFeedback, '已确认。选择翻译服务后即可开始。', 'success');
+  feedback(actionFeedback, '已确认。配置翻译服务后即可开始。', 'success');
 }));
 
 /** 主机权限请求直接由点击触发，不能在初始化或后台静默申请。 */
@@ -269,7 +270,6 @@ async function initialize(): Promise<void> {
   if (settingsResult.status === 'fulfilled' && settingsResult.value.ok) {
     settings = settingsResult.value.value;
     const initial = defaultSelection(settings);
-    provider.value = initial.provider;
     source.value = initial.source;
     target.value = initial.target;
   } else {
@@ -289,6 +289,7 @@ async function initialize(): Promise<void> {
     if (!panelResponse.ok || !applySidePanel(panelResponse.value)) sidePanelReadError = '侧栏状态暂时无法读取，请稍候或重新打开扩展。';
   }
   initialized = true;
+  document.body.dataset.ready = 'true';
   if (tabId !== undefined) pollTimer = setInterval(() => void pollStatus(), 1800);
   render();
 }

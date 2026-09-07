@@ -86,6 +86,15 @@ async function within<T>(operation: Promise<T>): Promise<T> {
 beforeEach(() => { vi.stubGlobal('crypto', webcrypto); });
 
 describe('后台来源与隐私边界', () => {
+  it('连接测试无需正文发送确认，只发送固定示例文本', async () => {
+    const { app, fetcher } = await configured();
+    expect((await app.handle({ type: 'SAVE_SETTINGS', dataNoticeAccepted: false }, optionSender)).ok).toBe(true);
+    expect(await app.handle({ type: 'TEST_SERVICE', provider: 'bailian' }, optionSender)).toMatchObject({ ok: true, value: { translated: '测试译文' } });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(vi.mocked(fetcher).mock.calls[0][1]?.body));
+    expect(body.messages.at(-1)?.content).toBe('Hello, world.');
+  });
+
   it('先限制 local/session 访问，再读取配置；公开状态不返回实际值', async () => {
     const { app, events, api } = await configured();
     expect(events.indexOf('local-protected')).toBeLessThan(events.indexOf('local-read'));
@@ -115,6 +124,13 @@ describe('后台来源与隐私边界', () => {
     expect(await app.handle({ type: 'SAVE_SETTINGS', preferences: { ...prefs, target: 'en' } }, popupSender)).toMatchObject({ ok: true });
     expect(await app.handle({ type: 'SAVE_SETTINGS', provider: 'bailian', config: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1' } }, popupSender)).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
     expect(await app.handle({ type: 'GET_SETTINGS' }, { ...optionSender, tab: { id: 19 } as chrome.tabs.Tab })).toMatchObject({ ok: true });
+  });
+
+  it('接收支持的多语偏好并拒绝清单之外的语言代码', async () => {
+    const { app } = await configured();
+    expect(await app.handle({ type: 'SAVE_SETTINGS', preferences: { ...prefs, source: 'ja', target: 'ko' } }, popupSender)).toMatchObject({ ok: true, value: { preferences: { source: 'ja', target: 'ko' } } });
+    const unsupported = { type: 'SAVE_SETTINGS', preferences: { ...prefs, source: 'xx', target: 'yy' } } as unknown as BackgroundMessage;
+    expect(await app.handle(unsupported, popupSender)).toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST', message: '请选择支持的语言选项。' } });
   });
 
   it('拒绝缺失文档身份、iframe、错误来源以及跨文档任务请求', async () => {
@@ -322,7 +338,7 @@ describe('0.2 默认服务与全站模式', () => {
     const context = createMock();
     const app = new BackgroundApp(context.api);
     await app.handle({ type: 'SAVE_SETTINGS', provider: 'aliyun', config: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', accessKeyId: 'VIRTUAL_ID_ONLY', accessKeySecret: 'VIRTUAL_ONLY' } }, optionSender);
-    expect(await app.handle({ type: 'GET_SETTINGS' }, popupSender)).toMatchObject({ ok: true, value: { preferences: { provider: 'aliyun' }, providerPriority: ['bailian', 'aliyun'] } });
+    expect(await app.handle({ type: 'GET_SETTINGS' }, popupSender)).toMatchObject({ ok: true, value: { preferences: { provider: 'aliyun' }, providerPriority: ['aliyun', 'bailian'] } });
     for (const providerPriority of [['bailian'], ['bailian', 'bailian'], ['aliyun', 'unsupported']]) expect(await app.handle({ type: 'SAVE_SETTINGS', providerPriority }, optionSender)).toMatchObject({ ok: false });
   });
 

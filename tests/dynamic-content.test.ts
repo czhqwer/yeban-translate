@@ -29,7 +29,11 @@ function toggle(checked: boolean): void {
   checkbox.checked = checked;
   checkbox.dispatchEvent(new Event('change', { bubbles: true }));
 }
-function sent(): string[] { return request.mock.calls.filter(([message]) => message.type === 'TRANSLATE').map(([message]) => message.text); }
+function sent(): string[] {
+  return request.mock.calls
+    .filter(([message]) => message.type === 'TRANSLATE')
+    .map(([message]) => String(message.text).replace(/\[\[YEBAN_FMT_\d+_\d+_(?:OPEN|CLOSE)\]\]/gu, ''));
+}
 
 describe('展开菜单后的增量正文发现', () => {
   it('全文模式展开菜单后自动翻译其中的屏外子项，不等待滚动', async () => {
@@ -135,7 +139,7 @@ describe('展开菜单后的增量正文发现', () => {
 
   it('服务失败清理菜单观察，重试恢复后补发现失败期间已展开的子菜单', async () => {
     let fail = true;
-    request.mockImplementation(async (message: { type: string; text?: string }) => message.type === 'BEGIN_JOB' ? { ok: true, value: { revision: 1 } } : message.type === 'TRANSLATE' && fail ? { ok: false, error: { code: 'AUTH', message: '鉴权失败。', retryable: false } } : { ok: true, value: { translated: '成功译文' } });
+    request.mockImplementation(async (message: { type: string; text?: string }) => message.type === 'BEGIN_JOB' ? { ok: true, value: { revision: 1 } } : message.type === 'TRANSLATE' && fail ? { ok: false, error: { code: 'AUTH', message: '鉴权失败。', retryable: false } } : { ok: true, value: { translated: message.text } });
     await translator.start(preferences);
     await vi.waitFor(() => expect(translator.status().failed).toBe(1));
     toggle(true);

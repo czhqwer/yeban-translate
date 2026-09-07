@@ -20,7 +20,7 @@ afterEach(async () => { await translator.restore(); vi.restoreAllMocks(); vi.uns
 describe('正文识别与分片', () => {
   it('按语义所有者读取全页文字，保护编辑区、代码块、隐藏内容和原有链接', () => {
     document.body.innerHTML = '<nav><p>Navigation</p></nav><article><h1>Title</h1><p>Hello <a href="/go">world</a></p><p hidden>Hidden</p><p>Visible <span style="display:none">hidden inline text</span></p><p contenteditable="">Draft</p><p>Unsafe <code>code</code></p><ul><li>Outer<ul><li>Inner</li></ul></li></ul><pre><p>Private code</p></pre></article>';
-    expect(extractParagraphs(document).map(readParagraphText)).toEqual(['Navigation', 'Title', 'Hello world', 'Visible', 'Unsafe [[YEBAN_KEEP_0_0]]', 'Outer', 'Inner']);
+    expect(extractParagraphs(document).map(readParagraphText)).toEqual(['Navigation', 'Title', 'Hello [[YEBAN_FMT_0_0_OPEN]]world[[YEBAN_FMT_0_0_CLOSE]]', 'Visible', 'Unsafe [[YEBAN_FMT_0_0_OPEN]][[YEBAN_KEEP_0_0]][[YEBAN_FMT_0_0_CLOSE]]', 'Outer', 'Inner']);
     expect(document.querySelector('a')?.getAttribute('href')).toBe('/go');
   });
 
@@ -34,6 +34,85 @@ describe('正文识别与分片', () => {
 });
 
 describe('网页翻译可观察行为', () => {
+  it('译文使用原正文的计算文本样式，不再渲染绿色左边框批注', async () => {
+    document.body.innerHTML = '<article><p id="styled" style="color:rgb(12, 34, 56);font-family:Georgia, serif;font-size:21px;font-weight:700;line-height:32px;letter-spacing:1px;text-align:right;margin:9px 7px 11px 5px">Styled source paragraph.</p></article>';
+    const shadows = new WeakMap<Element, ShadowRoot>();
+    const attach = Element.prototype.attachShadow;
+    vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (this: Element, init) { const shadow = attach.call(this, init); shadows.set(this, shadow); return shadow; });
+    const source = document.querySelector<HTMLElement>('#styled')!;
+    const expected = getComputedStyle(source);
+    await translator.start(preferences, 'expanded');
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    const host = document.querySelector<HTMLElement>(`[${OWNED}]`)!;
+    const shadow = shadows.get(host)!;
+    const translation = shadow.querySelector<HTMLElement>('div')!;
+    expect(translation.style.color).toBe('rgba(12, 34, 56, 0.62)');
+    for (const property of ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align']) {
+      expect(translation.style.getPropertyValue(property)).toBe(expected.getPropertyValue(property));
+      expect(translation.style.getPropertyPriority(property)).toBe('important');
+    }
+    expect(translation.style.getPropertyPriority('color')).toBe('important');
+    expect(shadow.querySelector('style')?.textContent).not.toMatch(/#167266|#42a895|border-left|padding:4px/u);
+    expect(host.style.marginTop).toBe(expected.marginTop);
+    expect(host.style.marginRight).toBe(expected.marginRight);
+    expect(host.style.marginBottom).toBe(expected.marginBottom);
+    expect(host.style.marginLeft).toBe(expected.marginLeft);
+  });
+
+  it('译文安全保留提示框、链接、粗体与行内代码格式，并让各处文字颜色稍淡', async () => {
+    document.body.innerHTML = '<main><p id="notice" style="color:rgb(20, 30, 40);background-color:rgb(245, 246, 240);border-left:4px solid rgb(255, 80, 100);padding:8px 12px">Read the <strong style="color:rgb(50, 60, 70)">important guide</strong>, open <a href="/stable" style="color:rgb(0, 90, 200)">stable version</a>, then call <code>enableCheckpointing(n)</code>.</p></main>';
+    const shadows = new WeakMap<Element, ShadowRoot>();
+    const attach = Element.prototype.attachShadow;
+    vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (this: Element, init) { const shadow = attach.call(this, init); shadows.set(this, shadow); return shadow; });
+    request.mockImplementation(async (message: { type: string; text?: string }) => {
+      if (message.type === 'BEGIN_JOB') return { ok: true, value: { revision: 1 } };
+      const text = message.text!
+        .replace('Read the ', '阅读')
+        .replace('important guide', '重要指南')
+        .replace(', open ', '，打开')
+        .replace('stable version', '稳定版本')
+        .replace(', then call ', '，然后调用')
+        .replace('.', '。');
+      return { ok: true, value: { translated: text } };
+    });
+    await translator.start(preferences, 'expanded');
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    const host = document.querySelector<HTMLElement>(`[${OWNED}]`)!;
+    const translation = shadows.get(host)!.querySelector<HTMLElement>('.translation')!;
+    const link = translation.querySelector<HTMLAnchorElement>('a')!;
+    expect(translation.textContent).toBe('阅读重要指南，打开稳定版本，然后调用enableCheckpointing(n)。');
+    expect(translation.style.color).toBe('rgba(20, 30, 40, 0.62)');
+    expect(translation.style.backgroundColor).toBe('rgb(245, 246, 240)');
+    expect(translation.style.borderLeftWidth).toBe('4px');
+    expect(translation.style.borderLeftStyle).toBe('solid');
+    expect(translation.style.borderLeftColor).toBe('rgb(255, 80, 100)');
+    expect(translation.style.paddingLeft).toBe('12px');
+    expect(translation.querySelector('strong')?.textContent).toBe('重要指南');
+    expect((translation.querySelector('strong') as HTMLElement).style.color).toBe('rgba(50, 60, 70, 0.62)');
+    expect(link.textContent).toBe('稳定版本');
+    expect(link.href).toBe('http://localhost:3000/stable');
+    expect(link.style.color).toBe('rgba(0, 90, 200, 0.62)');
+    expect(translation.querySelector('code')?.textContent).toBe('enableCheckpointing(n)');
+    expect(translation.querySelector('script')).toBeNull();
+  });
+
+  it('富文本标记被服务破坏时不展示也不缓存，重试成功后再渲染', async () => {
+    document.body.innerHTML = '<main><p>Read the <strong>important guide</strong>.</p></main>';
+    let damage = true;
+    request.mockImplementation(async (message: { type: string; text?: string }) => {
+      if (message.type === 'BEGIN_JOB') return { ok: true, value: { revision: 1 } };
+      return { ok: true, value: { translated: damage ? message.text!.replace('_CLOSE]]', '_BROKEN]]') : message.text } };
+    });
+    await translator.start(preferences, 'expanded');
+    await vi.waitFor(() => expect(translator.status().failed).toBe(1));
+    expect(document.querySelector(`[${OWNED}]`)).toBeNull();
+    damage = false;
+    await translator.retry();
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    expect(request.mock.calls.filter(([message]) => message.type === 'TRANSLATE')).toHaveLength(2);
+    expect(document.querySelector(`[${OWNED}]`)).toBeTruthy();
+  });
+
   it('全文模式只翻译关闭 details 的摘要，展开前不发送其折叠正文', async () => {
     document.body.innerHTML = '<main><details><summary>Advanced settings</summary><p>Collapsed details body stays local.</p></details><p>Expanded article.</p></main>';
     await translator.start(preferences, 'expanded');

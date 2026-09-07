@@ -3,12 +3,12 @@
   const empty = new URL(location.href).searchParams.has('empty');
   const onlyAliyun = new URL(location.href).searchParams.get('only') === 'aliyun';
   const settings = {
-    preferences: { provider: 'bailian', source: 'auto', target: 'zh' },
+    preferences: { provider: 'aliyun', source: 'auto', target: 'zh' },
     services: {
       bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', configured: !empty && !onlyAliyun },
       aliyun: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', configured: !empty },
     },
-    sites: [], dataNoticeAccepted: !empty, providerPriority: ['bailian', 'aliyun'], selectionEnabled: true,
+    sites: [], dataNoticeAccepted: !empty, providerPriority: ['aliyun', 'bailian'], selectionEnabled: true,
     allSitesEnabled: false, allSitesGranted: false, blockedSites: [],
   };
   let page = { state: 'idle', completed: 0, failed: 0, pending: 0 };

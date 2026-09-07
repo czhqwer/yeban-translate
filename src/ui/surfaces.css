@@ -103,9 +103,6 @@
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .panel-header h1 { font-size: 17px; line-height: 30px; letter-spacing: 0; }
 .panel-controls { display: grid; gap: 8px; }
-.panel-service-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
-.panel-service-row label { margin: 0; font-size: 12px; }
-.panel-service-hint { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 11px; }
 .panel-language-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); gap: 6px; align-items: center; }
 .panel-controls select { min-width: 0; min-height: 34px; height: 34px; padding: 5px 8px; font-size: 12px; }
 .panel-controls .language-arrow { height: 34px; font-size: 13px; }
