@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>页伴翻译 · 侧栏宽度验收</title>
+<style>
+body { margin: 20px; font: 14px system-ui; background: #e8ebe6; color: #20382f; }
+h1 { font-size: 20px; }
+.cases { display: flex; align-items: flex-start; gap: 18px; }
+section { flex: none; }
+iframe { display: block; border: 0; height: 800px; background: #f7f5ef; }
+</style></head>
+<body>
+<h1>侧栏宽度验收 · 模拟响应</h1><p>固定 iframe 宽度用于检查真实排版，不调用翻译服务。</p>
+<div class="cases">
+<section><h2>280px</h2><iframe title="280px 侧栏" width="280" src="/sidepanel.html?only=aliyun"></iframe></section>
+<section><h2>360px</h2><iframe title="360px 侧栏" width="360" src="/sidepanel.html?only=aliyun"></iframe></section>
+<section><h2>480px</h2><iframe title="480px 侧栏" width="480" src="/sidepanel.html?only=aliyun"></iframe></section>
+<section><h2>配置帮助 · 380 × 520px</h2><iframe title="380px 设置页" width="380" style="height:520px" src="/options.html"></iframe></section>
+</div>
+</body></html>

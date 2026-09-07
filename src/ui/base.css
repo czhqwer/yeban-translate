@@ -1,0 +1,51 @@
+@import url('./surfaces.css');
+
+:root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 14px; color: #20382f; background: #f7f5ef; --paper: #f7f5ef; --surface: #fffefb; --ink: #20382f; --muted: #748078; --line: #e3e7df; --accent: #22644e; --accent-hover: #174d3b; --wash: #edf4ee; --error: #a33e36; --error-wash: #fff1ed; --shadow: 0 10px 30px #263d2910; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select { font: inherit; }
+button, a, input, select { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; border: 1px solid var(--line); border-radius: 9px; min-height: 39px; padding: 8px 14px; color: var(--ink); background: var(--surface); transition: background .15s, border-color .15s; font-weight: 550; }
+button:hover:not(:disabled) { background: var(--wash); border-color: #98b0a1; }
+button:disabled { cursor: default; opacity: .43; }
+button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.subtle { background: transparent; }
+button.danger { color: var(--error); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:is(button, a, input, select):focus-visible { outline: 3px solid #91bba6; outline-offset: 3px; }
+input, select { display: block; width: 100%; min-height: 41px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); }
+input::placeholder { color: var(--muted); opacity: .75; }
+input:disabled, select:disabled { opacity: .65; }
+label { display: block; margin-bottom: 7px; font-size: 12px; color: var(--muted); font-weight: 600; }
+h1, h2, h3, p { margin: 0; }
+h1 { letter-spacing: -.035em; }
+h2 { font-size: 17px; letter-spacing: -.015em; }
+h3 { font-size: 14px; }
+.brand { display: flex; align-items: center; gap: 11px; }
+.brand-mark { width: 38px; height: 42px; flex: none; color: var(--accent); }
+.brand-name { font-weight: 750; letter-spacing: .045em; font-size: 18px; }
+.brand-en { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; letter-spacing: .13em; }
+.eyebrow { color: var(--accent); letter-spacing: .12em; font-weight: 650; font-size: 10px; text-transform: uppercase; }
+.muted { color: var(--muted); }
+.caption { color: var(--muted); font-size: 12px; line-height: 1.75; }
+.field + .field { margin-top: 15px; }
+.field-hint { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.badge { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-radius: 100px; padding: 4px 8px; font-size: 10px; white-space: nowrap; }
+.badge[data-ready='true'] { color: var(--accent); background: var(--wash); border-color: transparent; }
+.badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.feedback { padding: 10px 12px; border-radius: 8px; background: var(--wash); color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.feedback[data-tone='error'] { color: var(--error); background: var(--error-wash); }
+.feedback[data-tone='success'] { color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.notice { padding: 13px; border: 1px solid #d6e4d6; background: var(--wash); border-radius: 10px; }
+.notice p { font-size: 12px; line-height: 1.75; margin: 6px 0 10px; color: var(--muted); }
+.notice button { width: 100%; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #17201b; --surface: #202b24; --ink: #e2eadf; --muted: #a1afa3; --line: #36443b; --accent: #9bcdb1; --accent-hover: #b8ddc6; --wash: #2b3b2f; --error: #edaaa0; --error-wash: #422c2a; --shadow: 0 10px 30px #00000014; }
+  button.primary { color: #183624; }
+  .notice { border-color: #3e5746; }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "yeban-translate",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "description": "页伴翻译：网页双语与点击划词翻译",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "pack:extension": "node scripts/pack.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.9",
+    "@types/node": "^26.4.1",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
+  }
+}

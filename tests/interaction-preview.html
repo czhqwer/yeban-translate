@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>页伴翻译 · 右侧定位与拖动验收</title>
+<style>
+body { margin: 0; font: 16px/1.7 system-ui; color: #20382f; background: #f7f5ef; }
+main { margin: 48px 36px 120px; }
+h1 { font-size: 24px; }
+.note { color: #62756e; font-size: 13px; }
+#single { margin-top: 36px; }
+#multi { max-width: 290px; margin-top: 44px; }
+#edge { text-align: right; margin: 48px 12px 0 0; }
+#bottom { position: fixed; bottom: 8px; right: 62px; margin: 0; }
+</style><script src="/ui-preview.js"></script><script defer src="/content.js"></script></head>
+<body><main>
+<h1>Selection and floating controls</h1>
+<p class="note">本地模拟界面：单行、多行、边缘选区；按钮支持上下拖动。未连接真实 API。</p>
+<p id="single">Read <span>documentation</span> comfortably.</p>
+<p id="multi">Selecting several lines should place the small translation button beside the end of the selected text.</p>
+</main><p id="edge">Near the right edge: <span>translation</span></p>
+<p id="bottom">Bottom edge: <span>reading</span></p>
+</body></html>
