@@ -1,15 +1,19 @@
 import '../ui/base.css';
-import { send, PROVIDER_NAMES, type Preferences, type ProviderId, type PublicSettings, type ServiceInput } from '../shared/types';
+import { DEFAULT_HOVER_SHORTCUT, DEFAULT_PAGE_DISPLAY_MODE, send, PROVIDER_NAMES, type PageDisplayMode, type Preferences, type ProviderId, type PublicSettings, type ServiceInput } from '../shared/types';
 import { DEFAULT_PRIORITY, normalizePriority, resolveProvider } from '../shared/services';
 import { element, feedback, validEndpoint } from '../ui/common';
 import { websiteFeatures } from '../ui/state';
 import { initializeServiceHelp } from './help';
 import { populateLanguageSelect } from '../ui/languages';
+import { shortcutFromEvent } from '../shared/shortcuts';
 
 const providers: ProviderId[] = [...DEFAULT_PRIORITY];
 const globalFeedback = element('global-feedback');
 const defaultSource = element<HTMLSelectElement>('default-source');
 const defaultTarget = element<HTMLSelectElement>('default-target');
+const displayMode = element<HTMLSelectElement>('page-display-mode');
+const hoverToggle = element<HTMLInputElement>('hover-toggle');
+const hoverShortcut = element<HTMLInputElement>('hover-shortcut');
 populateLanguageSelect(defaultSource, true);
 populateLanguageSelect(defaultTarget, false);
 let settings: PublicSettings | undefined;
@@ -17,6 +21,8 @@ let busy = false;
 let priority: ProviderId[] = [...DEFAULT_PRIORITY];
 let priorityEdited = false;
 let renderedNoticeAccepted: boolean | undefined;
+
+function privacyIsTargeted(): boolean { return location.hash === '#privacy'; }
 
 /** 配置卡片与默认优先级保持一致，序号同时按当前默认顺序展示。 */
 function orderProviderForms(): void {
@@ -59,7 +65,8 @@ function renderAvailability(): void {
   if (settings) {
     const details = element<HTMLDetailsElement>('privacy-details');
     // 仅在确认状态变化时设置默认开合，避免刷新覆盖用户手动展开。
-    if (renderedNoticeAccepted !== accepted) details.open = !accepted;
+    if (privacyIsTargeted()) details.open = true;
+    else if (renderedNoticeAccepted !== accepted) details.open = !accepted;
     renderedNoticeAccepted = accepted;
     details.dataset.confirmed = String(accepted);
     element('privacy-summary-state').textContent = accepted ? '已确认' : '待确认';
@@ -74,11 +81,16 @@ function renderSettings(refreshFields = false): void {
   if (refreshFields) {
     defaultSource.value = settings.preferences.source;
     defaultTarget.value = settings.preferences.target;
+    displayMode.value = settings.pageDisplayMode ?? DEFAULT_PAGE_DISPLAY_MODE;
     for (const provider of providers) {
       input(`${provider}-endpoint`).value = settings.services[provider].endpoint;
       if (provider === 'bailian') input('bailian-model').value = settings.services.bailian.model || '';
     }
   }
+  hoverToggle.checked = settings.hoverTranslationEnabled === true;
+  element('hover-toggle-label').textContent = hoverToggle.checked ? '已开启' : '已关闭';
+  hoverShortcut.value = settings.hoverShortcut ?? DEFAULT_HOVER_SHORTCUT;
+  renderDisplayModeHint();
   if (!priorityEdited || refreshFields) priority = normalizePriority(settings.providerPriority, settings.preferences.provider);
   for (const provider of providers) {
     const configured = settings.services[provider].configured;
@@ -96,6 +108,16 @@ function renderSettings(refreshFields = false): void {
   renderPriority();
   renderSites();
   renderAvailability();
+}
+
+function renderDisplayModeHint(): void {
+  const descriptions: Record<PageDisplayMode, string> = {
+    bilingual: '双语对照会保留原文，并在原文下方插入译文。',
+    translation: '仅显示译文会临时隐藏已翻译的原文，恢复原文后完整还原。',
+    hover: '默认只显示译文；鼠标悬停或键盘聚焦译文时显示原文。',
+    parallel: '普通宽屏正文左右对照；窄屏、表格和列表等复杂结构会安全回退为上下对照。',
+  };
+  element('display-mode-hint').textContent = descriptions[(displayMode.value as PageDisplayMode) || DEFAULT_PAGE_DISPLAY_MODE];
 }
 
 /** 调整顺序只更新待保存偏好，已有任务仍使用自己的服务快照。 */
@@ -154,7 +176,7 @@ function renderSites(): void {
   const state = element('all-sites-state');
   state.textContent = allActive ? '已启用并授权' : settings.allSitesEnabled ? '权限待恢复' : settings.allSitesGranted ? '已授权，尚未启用' : '尚未获得全站权限';
   state.dataset.ready = String(allActive);
-  element('all-sites-detail').textContent = allActive ? '普通 HTTP / HTTPS 网页可使用悬浮球。划词是否可用由上方开关决定；受限页面除外。' : settings.allSitesEnabled ? '全站偏好仍保留，但浏览器权限已不足。重新授权前只使用仍获授权的单独网站。' : '划词和悬浮球需要网站访问权限；开启功能本身不会自动获得授权。也可只在需要的网站单独启用。';
+  element('all-sites-detail').textContent = allActive ? '普通 HTTP / HTTPS 网页可使用悬浮球；划词与悬停翻译分别遵循上方开关，受限页面除外。' : settings.allSitesEnabled ? '全站偏好仍保留，但浏览器权限已不足。重新授权前只使用仍获授权的单独网站。' : '划词、悬停翻译和悬浮球需要网站访问权限；开启功能本身不会自动获得授权。也可只在需要的网站单独启用。';
   element('grant-all-sites').hidden = allActive;
   element('disable-all-sites').hidden = !settings.allSitesEnabled;
   element('sites-empty').hidden = sites.length > 0;
@@ -290,7 +312,7 @@ element<HTMLFormElement>('preferences-form').addEventListener('submit', event =>
   if (!settings) return;
   const preferences: Preferences = { provider: settings.preferences.provider, source: defaultSource.value as Preferences['source'], target: defaultTarget.value as Preferences['target'] };
   void perform(element<HTMLButtonElement>('save-preferences'), globalFeedback, async () => {
-    const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', preferences, providerPriority: priority });
+    const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', preferences, providerPriority: priority, pageDisplayMode: displayMode.value as PageDisplayMode });
     if (!response.ok) { feedback(globalFeedback, response.error.message, 'error'); return; }
     settings = response.value;
     priorityEdited = false;
@@ -298,6 +320,7 @@ element<HTMLFormElement>('preferences-form').addEventListener('submit', event =>
     feedback(globalFeedback, '阅读偏好已保存，将用于新任务。', 'success');
   });
 });
+displayMode.addEventListener('change', renderDisplayModeHint);
 element('accept-notice').addEventListener('click', () => void perform(element<HTMLButtonElement>('accept-notice'), globalFeedback, async () => {
   const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', dataNoticeAccepted: true });
   if (!response.ok) { feedback(globalFeedback, response.error.message, 'error'); return; }
@@ -316,6 +339,40 @@ element<HTMLInputElement>('selection-toggle').addEventListener('change', () => {
     feedback(globalFeedback, enabled ? '划词功能已开启；只在有访问权限的网站生效。' : '划词功能已关闭，悬浮球和手动翻译仍可使用。', 'success');
   });
 });
+
+hoverToggle.addEventListener('change', () => {
+  const enabled = hoverToggle.checked;
+  void perform(element<HTMLButtonElement>('save-preferences'), globalFeedback, async () => {
+    const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', hoverTranslationEnabled: enabled });
+    if (!response.ok) { feedback(globalFeedback, response.error.message, 'error'); renderSettings(); return; }
+    settings = response.value;
+    renderSettings();
+    feedback(globalFeedback, enabled ? `鼠标悬停翻译已开启；将鼠标放在段落上并按 ${settings.hoverShortcut ?? DEFAULT_HOVER_SHORTCUT}。` : '鼠标悬停翻译已关闭。', 'success');
+  });
+});
+
+async function saveHoverShortcut(shortcut: string): Promise<void> {
+  await perform(element<HTMLButtonElement>('save-preferences'), globalFeedback, async () => {
+    const response = await send<PublicSettings>({ type: 'SAVE_SETTINGS', hoverShortcut: shortcut });
+    if (!response.ok) { feedback(globalFeedback, response.error.message, 'error'); renderSettings(); return; }
+    settings = response.value;
+    renderSettings();
+    feedback(globalFeedback, `悬停翻译快捷键已保存为 ${settings.hoverShortcut}。`, 'success');
+  });
+}
+
+hoverShortcut.addEventListener('focus', () => hoverShortcut.select());
+hoverShortcut.addEventListener('click', () => hoverShortcut.select());
+hoverShortcut.addEventListener('keydown', event => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === 'Escape' || ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
+  const shortcut = shortcutFromEvent(event);
+  if (!shortcut) { feedback(globalFeedback, '请按包含 Ctrl、Alt 或 Meta 的组合键。', 'error'); return; }
+  hoverShortcut.value = shortcut;
+  void saveHoverShortcut(shortcut);
+});
+element('reset-hover-shortcut').addEventListener('click', () => { void saveHoverShortcut(DEFAULT_HOVER_SHORTCUT); });
 element('grant-all-sites').addEventListener('click', () => {
   if (busy || !settings) return;
   const permissionRequest = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });
@@ -340,6 +397,11 @@ async function initialize(): Promise<void> {
   if (!response.ok) { feedback(globalFeedback, response.error.message, 'error'); return; }
   settings = response.value;
   renderSettings(true);
+  if (privacyIsTargeted()) {
+    const privacy = element('privacy');
+    privacy.scrollIntoView?.({ block: 'start' });
+    privacy.querySelector<HTMLElement>('summary')?.focus();
+  }
 }
 void initialize();
 window.addEventListener('focus', () => { if (!busy && settings) void refreshSettings(); });

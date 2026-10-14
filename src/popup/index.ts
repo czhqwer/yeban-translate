@@ -121,14 +121,14 @@ function render(): void {
   element('site-host').textContent = origin ? `${new URL(origin).host}${features.selection ? ' · 划词已启用' : enabled ? ' · 浮球已启用' : ''}` : '当前页面不支持';
   element('site-feature-hint').textContent = settings?.selectionEnabled === false ? '划词功能已关闭；网站授权仍可用于悬浮球。可在设置中开启划词。' : features.selection ? '选中文字后，点击翻译按钮才会发送请求。' : '划词功能已开启；此网站仍需访问授权才能使用。';
   element('all-sites-guide').hidden = !settings || (settings.allSitesEnabled === true && settings.allSitesGranted === true);
-  const titles: Record<PageStatus['state'], string> = { idle: '准备好，读下一页', running: '正在分批翻译已展开文字', waiting: '当前已展开内容已完成', partial: '部分段落翻译失败', stopped: '翻译已停止', unavailable: '当前页面不支持' };
+  const titles: Record<PageStatus['state'], string> = { idle: '准备好，读下一页', running: '正在翻译当前可见内容', waiting: '等待继续滚动阅读', partial: '部分段落翻译失败', stopped: '翻译已停止', unavailable: '当前页面不支持' };
   const missingService = Boolean(settings && !ready && !running && pageStatus.state !== 'unavailable');
   element('status-title').textContent = missingService ? '尚未配置翻译服务' : titles[pageStatus.state];
   element('status-dot').dataset.state = missingService ? 'unavailable' : pageStatus.state;
-  let detail = pageStatus.message || '点击开始后，将分批翻译页面当前已展开的文字。';
+  let detail = pageStatus.message || '点击开始后，只翻译当前可见内容，滚动时继续处理。';
   if (missingService) detail = '请点击右上角设置，配置服务并调整使用优先级。';
-  if (!pageStatus.message && pageStatus.state === 'running') detail = '正在分批翻译页面已展开文字，无需滚动触发。';
-  if (!pageStatus.message && pageStatus.state === 'waiting') detail = '展开菜单或折叠内容后，会继续补译新显示的文字。';
+  if (!pageStatus.message && pageStatus.state === 'running') detail = '正在翻译当前视口内的文字。';
+  if (!pageStatus.message && pageStatus.state === 'waiting') detail = '继续向下滚动后，会自动翻译新进入视口的文字。';
   if (!pageStatus.message && pageStatus.state === 'stopped') detail = '已完成译文保留，已提交请求仍可能计入用量。';
   if (pageStatus.completed || pageStatus.failed || pageStatus.pending) detail = `已译 ${pageStatus.completed} 段${pageStatus.failed ? ` · 失败 ${pageStatus.failed} 段` : ''}${pageStatus.pending ? ` · 待处理 ${pageStatus.pending} 段` : ''}。${detail}`;
   element('status-detail').textContent = detail;
@@ -170,7 +170,7 @@ async function ensureContent(): Promise<boolean> {
   }
 }
 
-/** 用户主动开始后分批处理已展开内容；弹窗生命周期不控制正文任务。 */
+/** 用户主动开始后只处理当前视口，随后随滚动继续；弹窗生命周期不控制正文任务。 */
 start.addEventListener('click', () => void perform(async () => {
   if (tabId === undefined) return;
   const chosen = selection();

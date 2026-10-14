@@ -70,7 +70,7 @@ async function configured(fetcher: typeof fetch = vi.fn(async () => completed())
   return { ...context, app, fetcher };
 }
 
-async function start(app: BackgroundApp, jobId = 'job-page', kind: 'page' | 'selection' = 'page'): Promise<void> {
+async function start(app: BackgroundApp, jobId = 'job-page', kind: 'page' | 'selection' | 'hover' = 'page'): Promise<void> {
   const result = await app.handle({ type: 'BEGIN_JOB', jobId, mode: kind, preferences: prefs }, pageSender);
   expect(result).toMatchObject({ ok: true, value: { revision: 1 } });
 }
@@ -131,6 +131,14 @@ describe('后台来源与隐私边界', () => {
     expect(await app.handle({ type: 'SAVE_SETTINGS', preferences: { ...prefs, source: 'ja', target: 'ko' } }, popupSender)).toMatchObject({ ok: true, value: { preferences: { source: 'ja', target: 'ko' } } });
     const unsupported = { type: 'SAVE_SETTINGS', preferences: { ...prefs, source: 'xx', target: 'yy' } } as unknown as BackgroundMessage;
     expect(await app.handle(unsupported, popupSender)).toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST', message: '请选择支持的语言选项。' } });
+  });
+
+  it('迁移并持久化页面展示模式、默认关闭的悬停翻译和规范快捷键', async () => {
+    const { app } = await configured();
+    expect(await app.handle({ type: 'GET_SETTINGS' }, optionSender)).toMatchObject({ ok: true, value: { pageDisplayMode: 'bilingual', hoverTranslationEnabled: false, hoverShortcut: 'Alt+I' } });
+    expect(await app.handle({ type: 'SAVE_SETTINGS', pageDisplayMode: 'parallel', hoverTranslationEnabled: true, hoverShortcut: 'Ctrl+Shift+K' }, optionSender)).toMatchObject({ ok: true, value: { pageDisplayMode: 'parallel', hoverTranslationEnabled: true, hoverShortcut: 'Ctrl+Shift+K' } });
+    expect(await app.handle({ type: 'SAVE_SETTINGS', hoverShortcut: 'Shift+I' }, optionSender)).toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+    expect(await app.handle({ type: 'SAVE_SETTINGS', pageDisplayMode: 'overlay' } as unknown as BackgroundMessage, optionSender)).toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
   });
 
   it('拒绝缺失文档身份、iframe、错误来源以及跨文档任务请求', async () => {
@@ -277,6 +285,114 @@ describe('站点划词授权', () => {
     expect(registered.size).toBe(0);
     expect(mock.tabs.sendMessage).toHaveBeenCalledWith(8, { type: 'SITE_CHANGED', enabled: false });
     expect(await app.handle({ type: 'TRANSLATE', mode: 'selection', jobId: 'selected', itemId: 'chosen', text: 'Hello' }, pageSender)).toMatchObject({ ok: false });
+  });
+
+  it('工具栏授权框关闭弹窗后，后台权限新增事件直接启用当前网站并注入页面', async () => {
+    const { app, origins, registered, mock } = await configured();
+    vi.clearAllMocks();
+    origins.add('https://example.test/*');
+    await app.permissionsAdded({ origins: ['https://example.test/*'] });
+    expect(await app.handle({ type: 'GET_SETTINGS' }, popupSender)).toMatchObject({ ok: true, value: { sites: ['https://example.test'] } });
+    expect([...registered.values()][0]).toMatchObject({ matches: ['https://example.test/*'], js: ['content.js'] });
+    expect(mock.scripting.executeScript).toHaveBeenCalledWith({ target: { tabId: 8, allFrames: true }, files: ['content.js'] });
+    expect(mock.tabs.sendMessage).toHaveBeenCalledWith(8, { type: 'SITE_CHANGED', enabled: true });
+  });
+
+  it('全站权限新增事件一次完成启用、注册和当前页面注入', async () => {
+    const { app, origins, registered, mock } = await configured();
+    vi.clearAllMocks();
+    origins.add('http://*/*');
+    origins.add('https://*/*');
+    await app.permissionsAdded({ origins: ['<all_urls>'] });
+    expect(await app.handle({ type: 'GET_SETTINGS' }, popupSender)).toMatchObject({ ok: true, value: { allSitesEnabled: true, allSitesGranted: true } });
+    expect([...registered.keys()]).toEqual(['yeban-all-sites']);
+    expect(mock.scripting.executeScript).toHaveBeenCalledWith({ target: { tabId: 8, allFrames: true }, files: ['content.js'] });
+  });
+
+  it('悬停任务要求网站授权和独立开关，关闭后立即使已有任务失效', async () => {
+    const { app, origins } = await configured();
+    origins.add('https://example.test/*');
+    await app.handle({ type: 'ENABLE_SITE', origin: 'https://example.test' }, popupSender);
+    expect(await app.handle({ type: 'BEGIN_JOB', mode: 'hover', jobId: 'hovered', preferences: prefs }, pageSender)).toMatchObject({ ok: false, error: { code: 'PERMISSION' } });
+    await app.handle({ type: 'SAVE_SETTINGS', hoverTranslationEnabled: true }, optionSender);
+    expect(await app.handle({ type: 'GET_CONTEXT' }, pageSender)).toMatchObject({ ok: true, value: { hoverTranslationEnabled: true, hoverShortcut: 'Alt+I' } });
+    await start(app, 'hovered', 'hover');
+    expect(await app.handle({ type: 'TRANSLATE', mode: 'hover', jobId: 'hovered', itemId: 'paragraph', text: 'Hover text' }, pageSender)).toMatchObject({ ok: true });
+    await app.handle({ type: 'SAVE_SETTINGS', hoverTranslationEnabled: false }, optionSender);
+    expect(await app.handle({ type: 'TRANSLATE', mode: 'hover', jobId: 'hovered', itemId: 'later', text: 'Later text' }, pageSender)).toMatchObject({ ok: false });
+  });
+});
+
+describe('同源 iframe 划词与文档隔离', () => {
+  const child = { ...pageSender, url: 'https://example.test/md/', frameId: 2, documentId: 'frame-document' };
+
+  async function authorizedFrame() {
+    const fixture = await configured();
+    fixture.origins.add('https://example.test/*');
+    await fixture.app.handle({ type: 'ENABLE_SITE', origin: 'https://example.test' }, popupSender);
+    return fixture;
+  }
+
+  it('已授权同源 iframe 可主动翻译，独立上下文不创建浮球或侧栏状态', async () => {
+    const { app, mock, registered } = await authorizedFrame();
+    expect([...registered.values()][0].allFrames).toBe(true);
+    expect(await app.handle({ type: 'GET_CONTEXT' }, child)).toMatchObject({ ok: true, value: { selectionEnabled: true, floatingEnabled: false, sidePanel: undefined } });
+    expect(await app.handle({ type: 'BEGIN_JOB', jobId: 'selected', mode: 'selection', preferences: prefs }, child)).toMatchObject({ ok: true });
+    expect(await app.handle({ type: 'TRANSLATE', jobId: 'selected', mode: 'selection', itemId: 'p', text: 'Dummy iframe selection' }, child)).toMatchObject({ ok: true, value: { translated: '测试译文' } });
+    expect(mock.scripting.executeScript).toHaveBeenCalledWith({ target: { tabId: 8, documentIds: ['frame-document'] }, func: expect.any(Function) });
+  });
+
+  it('不同 iframe 使用相同任务 ID 仍彼此隔离，取消一个不影响另一个和顶层', async () => {
+    const { app } = await authorizedFrame();
+    const sibling = { ...child, frameId: 3, documentId: 'sibling-document' };
+    for (const sender of [pageSender, child, sibling]) expect(await app.handle({ type: 'BEGIN_JOB', mode: 'selection', jobId: 'same-id', preferences: prefs }, sender)).toMatchObject({ ok: true });
+    await app.handle({ type: 'CANCEL_JOB', mode: 'selection', jobId: 'same-id' }, child);
+    const command = { type: 'TRANSLATE', mode: 'selection', jobId: 'same-id', itemId: 'p', text: 'Dummy selected words' };
+    expect(await app.handle(command, child)).toMatchObject({ ok: false });
+    for (const sender of [pageSender, sibling]) expect(await app.handle(command, sender)).toMatchObject({ ok: true });
+    expect(await app.handle(command, { ...sibling, documentId: 'new-document' })).toMatchObject({ ok: false });
+  });
+
+  it('跨站 iframe 即使自身获得站点授权也不能借用顶层页面', async () => {
+    const { app, origins, fetcher } = await authorizedFrame();
+    origins.add('https://other.test/*');
+    await app.handle({ type: 'ENABLE_SITE', origin: 'https://other.test' }, popupSender);
+    const crossOrigin = { ...child, url: 'https://other.test/md/', origin: 'https://other.test' };
+    expect(await app.handle({ type: 'GET_CONTEXT' }, crossOrigin)).toMatchObject({ ok: false });
+    expect(await app.handle({ type: 'BEGIN_JOB', mode: 'selection', jobId: 'x', preferences: prefs }, crossOrigin)).toMatchObject({ ok: false });
+    expect(await app.handle({ type: 'GET_CONTEXT' }, { ...child, origin: 'null' })).toMatchObject({ ok: false });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('iframe 无权启动全文翻译、读取凭据配置或控制顶层浮球与侧栏', async () => {
+    const { app } = await authorizedFrame();
+    for (const command of [
+      { type: 'GET_SETTINGS' }, { type: 'SET_FLOATING_POSITION', position: 0.4 }, { type: 'GET_SIDE_PANEL_STATE' },
+      { type: 'OPEN_SIDE_PANEL' }, { type: 'SET_SIDE_PANEL', open: true },
+      { type: 'BEGIN_JOB', mode: 'page', jobId: 'x', preferences: prefs },
+    ]) expect(await app.handle(command, child)).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
+  });
+
+  it('子文档导航、顶层跨站或撤销授权后不再提交翻译', async () => {
+    const { app, mock, origins, fetcher } = await authorizedFrame();
+    await app.handle({ type: 'BEGIN_JOB', mode: 'selection', jobId: 'x', preferences: prefs }, child);
+    const command = { type: 'TRANSLATE', mode: 'selection', jobId: 'x', itemId: 'p', text: 'Dummy selected words' };
+    mock.scripting.executeScript.mockResolvedValueOnce([{ documentId: 'replaced-document', result: true }]);
+    expect(await app.handle(command, child)).toMatchObject({ ok: false });
+    mock.tabs.get.mockResolvedValueOnce({ id: 8, url: 'https://other.test/article' });
+    expect(await app.handle(command, child)).toMatchObject({ ok: false });
+    origins.clear();
+    expect(await app.handle(command, child)).toMatchObject({ ok: false });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('升级时替换同一来源的旧顶层注册，保留网站授权并启用全部 frame', async () => {
+    const { app, registered } = await authorizedFrame();
+    const [id, script] = [...registered.entries()][0];
+    registered.set(id, { ...script, allFrames: false });
+    await app.handle({ type: 'ENABLE_SITE', origin: 'https://example.test' }, popupSender);
+    expect(registered.size).toBe(1);
+    expect(registered.get(id)?.allFrames).toBe(true);
   });
 });
 

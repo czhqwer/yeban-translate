@@ -10,6 +10,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
 chrome.runtime.onConnect.addListener(port => { app.connectPanel(port); });
 
+chrome.permissions.onAdded.addListener(permissions => { void app.permissionsAdded(permissions).catch(() => undefined); });
 chrome.permissions.onRemoved.addListener(() => { void app.permissionsRemoved().catch(() => undefined); });
 chrome.tabs.onRemoved.addListener(tabId => { app.panelTabDetached(tabId); void app.invalidateTab(tabId).catch(() => undefined); });
 chrome.tabs.onUpdated.addListener((tabId, change) => {

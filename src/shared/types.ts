@@ -5,7 +5,8 @@ export type { LanguageCode, SourceLanguage } from './languages';
 export type ProviderId = 'bailian' | 'aliyun';
 export type ProviderChoice = 'auto' | ProviderId;
 export type TargetLanguage = LanguageCode;
-export type TranslationMode = 'page' | 'selection';
+export type TranslationMode = 'page' | 'selection' | 'hover';
+export type PageDisplayMode = 'bilingual' | 'translation' | 'hover' | 'parallel';
 
 export interface Preferences {
   provider: ProviderId;
@@ -45,6 +46,9 @@ export interface PublicSettings {
   allSitesEnabled?: boolean;
   allSitesGranted?: boolean;
   blockedSites?: string[];
+  pageDisplayMode?: PageDisplayMode;
+  hoverTranslationEnabled?: boolean;
+  hoverShortcut?: string;
 }
 
 export interface PageContext {
@@ -57,6 +61,9 @@ export interface PageContext {
   /** 悬浮按钮在可移动高度内的比例，仅包含界面位置。 */
   floatingPosition?: number;
   sidePanel?: SidePanelState;
+  pageDisplayMode?: PageDisplayMode;
+  hoverTranslationEnabled?: boolean;
+  hoverShortcut?: string;
 }
 
 /** 原生侧栏是窗口级状态；启用配置不等于已经打开。 */
@@ -102,7 +109,7 @@ export type BackgroundMessage =
   | { type: 'GET_SETTINGS' }
   | { type: 'GET_CONTEXT' }
   | { type: 'SET_FLOATING_POSITION'; position: number }
-  | { type: 'SAVE_SETTINGS'; preferences?: Preferences; provider?: ProviderId; config?: ServiceInput; dataNoticeAccepted?: boolean; providerPriority?: ProviderId[]; selectionEnabled?: boolean }
+  | { type: 'SAVE_SETTINGS'; preferences?: Preferences; provider?: ProviderId; config?: ServiceInput; dataNoticeAccepted?: boolean; providerPriority?: ProviderId[]; selectionEnabled?: boolean; pageDisplayMode?: PageDisplayMode; hoverTranslationEnabled?: boolean; hoverShortcut?: string }
   | { type: 'DELETE_SERVICE'; provider: ProviderId }
   | { type: 'TEST_SERVICE'; provider: ProviderId }
   | { type: 'ENABLE_SITE'; origin: string }
@@ -138,6 +145,8 @@ export const DEFAULT_SERVICES: Record<ProviderId, PublicService> = {
   aliyun: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', configured: false },
 };
 export const SELECTION_LIMIT = 2000;
+export const DEFAULT_PAGE_DISPLAY_MODE: PageDisplayMode = 'bilingual';
+export const DEFAULT_HOVER_SHORTCUT = 'Alt+I';
 
 /** 所有消息回复统一归类，界面不展示底层请求原文。 */
 export async function send<T>(message: BackgroundMessage): Promise<Reply<T>> {

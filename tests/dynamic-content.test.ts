@@ -117,7 +117,7 @@ describe('展开菜单后的增量正文发现', () => {
     expect(document.querySelectorAll(`[${OWNED}]`)).toHaveLength(0);
   });
 
-  it('导航 childList 与 class 展开可发现新项，仍折叠内容和正文区动态插入不触发付费', async () => {
+  it('导航与动态正文都可增量发现，只有可见的新内容才触发翻译', async () => {
     document.querySelector('style')!.textContent += 'nav ul.collapsed{display:none}';
     await translator.start(preferences);
     await vi.waitFor(() => expect(translator.status().completed).toBe(1));
@@ -133,7 +133,7 @@ describe('展开菜单后的增量正文发现', () => {
     outside.textContent = 'New body content is outside incremental menu scope.';
     document.body.append(outside);
     await new Promise(resolve => setTimeout(resolve, 180));
-    expect(sent()).toEqual(['Try Flink', 'Additional menu entry.']);
+    expect(sent()).toEqual(['Try Flink', 'Additional menu entry.', 'New body content is outside incremental menu scope.']);
     expect(sent().some(text => text.includes('译文：'))).toBe(false);
   });
 
@@ -175,5 +175,31 @@ describe('展开菜单后的增量正文发现', () => {
     observer.enter(lastItem);
     await vi.waitFor(() => expect(translator.status().completed).toBe(3));
     expect(sent()).toEqual(['Try Flink', 'First steps', 'Examples']);
+  });
+
+  it('滚动加载的普通正文先登记，进入视口后才发送', async () => {
+    let observer!: TestObserver;
+    class TestObserver {
+      readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) { observer = this; }
+      observe(target: Element): void { this.targets.add(target); }
+      unobserve(target: Element): void { this.targets.delete(target); }
+      disconnect(): void { this.targets.clear(); }
+      enter(target: Element): void { this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
+    }
+    vi.stubGlobal('IntersectionObserver', TestObserver);
+    await translator.start(preferences);
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    const article = document.createElement('article');
+    article.innerHTML = '<p>Lazy loaded article paragraph.</p>';
+    const paragraph = article.querySelector('p')!;
+    let visible = false;
+    Object.defineProperty(paragraph, 'getBoundingClientRect', { configurable: true, value: () => visible ? rect : ({ ...rect, top: 4000, bottom: 4020 }) });
+    document.body.append(article);
+    await vi.waitFor(() => expect(observer.targets.has(paragraph)).toBe(true));
+    expect(sent()).toEqual(['Try Flink']);
+    visible = true;
+    observer.enter(paragraph);
+    await vi.waitFor(() => expect(sent()).toEqual(['Try Flink', 'Lazy loaded article paragraph.']));
   });
 });

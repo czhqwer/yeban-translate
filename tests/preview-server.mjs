@@ -6,6 +6,8 @@ import { resolve, extname, sep } from 'node:path';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dist = resolve(root, 'dist');
 const testFiles = new Map([['/ui-preview.js', 'ui-preview.js'], ['/article.html', 'article.html'], ['/flink-layout.html', 'flink-layout.html'], ['/sidepanel-layout.html', 'sidepanel-layout.html'], ['/interaction-preview.html', 'interaction-preview.html']]);
+testFiles.set('/frame-preview.html', 'frame-preview.html');
+testFiles.set('/frame-content.html', 'frame-content.html');
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
 // 只在环回地址展示生成的页面；生产安装包不含该模拟服务。

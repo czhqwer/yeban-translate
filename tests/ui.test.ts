@@ -381,7 +381,7 @@ describe('弹窗的窗口级侧栏开关', () => {
     node('open-sidepanel').click();
     await vi.waitFor(() => expect(node('action-feedback').textContent).toBe('模拟原生打开失败。'));
     expect(node('sidepanel-label').textContent).toBe('打开文本翻译侧栏');
-    expect(node('status-title').textContent).toBe('当前已展开内容已完成');
+    expect(node('status-title').textContent).toBe('等待继续滚动阅读');
     expect(node('status-detail').textContent).toContain('已译 3 段');
     request.mockImplementation((message: BackgroundMessage) => message.type === 'SET_SIDE_PANEL' ? Promise.resolve({ ok: true, value: null }) : previous(message));
     node('open-sidepanel').click();
@@ -405,10 +405,10 @@ describe('弹窗的窗口级侧栏开关', () => {
   });
 
   it('内容页 actionError 单独显示，正文状态及停止按钮仍保持可用', async () => {
-    pageStatus = { ...pageStatus, state: 'running', completed: 2, pending: 4, message: '正在分批翻译页面已展开文字。', actionError: { code: 'SIDE_PANEL', message: '侧栏打开失败，请重试。', retryable: true } };
+    pageStatus = { ...pageStatus, state: 'running', completed: 2, pending: 4, message: '正在翻译当前视口内的文字。', actionError: { code: 'SIDE_PANEL', message: '侧栏打开失败，请重试。', retryable: true } };
     await load('popup');
     expect(node('action-feedback').textContent).toBe('侧栏打开失败，请重试。');
-    expect(node('status-title').textContent).toBe('正在分批翻译已展开文字');
+    expect(node('status-title').textContent).toBe('正在翻译当前可见内容');
     expect(node('status-detail').textContent).toContain('已译 2 段');
     expect(node('status-detail').textContent).not.toContain('侧栏打开失败');
     expect(node<HTMLButtonElement>('stop').disabled).toBe(false);

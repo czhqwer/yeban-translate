@@ -24,7 +24,7 @@ const manifest = {
   name: '页伴翻译',
   short_name: '页伴翻译',
   version,
-  description: '一页双语，随手即译。支持网页双语、点击划词、悬浮球和文本翻译侧边栏，可配置百炼与阿里云机器翻译。',
+  description: '一页双语，随手即译。支持网页多模式翻译、点击划词、编辑器回写、快捷键悬停翻译和文本侧栏。',
   minimum_chrome_version: '116',
   permissions: ['activeTab', 'scripting', 'storage', 'sidePanel'],
   host_permissions: [

@@ -8,7 +8,7 @@ const CONTAINERS = 'nav,aside';
 const ALL_BLOCKS = `${BLOCKS},${INLINE_BLOCKS},${CONTAINERS}`;
 const EXCLUDED = `input,textarea,select,option,button,pre,script,style,noscript,iframe,svg,canvas,object,embed,[${OWNED}],[contenteditable]:not([contenteditable="false"]),[role="textbox"],[hidden],[aria-hidden="true"]`;
 const PROTECTED = `${EXCLUDED},code`;
-const SELECTION_BLOCKED = `input,textarea,select,option,button,pre,script,style,noscript,iframe,canvas,object,embed,[${OWNED}],[contenteditable]:not([contenteditable="false"]),[role="textbox"]`;
+const SELECTION_BLOCKED = `input,textarea,select,option,button,script,style,noscript,iframe,canvas,object,embed,[${OWNED}]`;
 const SELECTION_IGNORED = `svg,[hidden],[aria-hidden="true"]`;
 const RICH_INLINE = 'a,abbr,b,bdi,bdo,cite,code,del,em,i,ins,kbd,mark,q,s,samp,small,span,strong,sub,sup,time,u,var';
 const MAX_INLINE_FORMATS = 20;
@@ -256,12 +256,21 @@ export function isInViewport(node: Element | Range): boolean {
   return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
 }
 
-export interface SelectionSnapshot { text: string; range: Range; documentUrl: string }
+interface SelectionBase { text: string; documentUrl: string }
+export type SelectionSnapshot =
+  | SelectionBase & { kind: 'range'; range: Range; editableRoot?: HTMLElement }
+  | SelectionBase & { kind: 'control'; control: HTMLInputElement | HTMLTextAreaElement; start: number; end: number };
+
+function editableRoot(node: Node): HTMLElement | undefined {
+  const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+  const root = element?.closest<HTMLElement>('[contenteditable]:not([contenteditable="false"])');
+  return root?.isConnected ? root : undefined;
+}
 
 /**
  * 按 Range 实际覆盖的文本节点重建可发送文本。
- * 隐藏节点与 SVG 装饰直接跳过；真正覆盖代码块、输入区等交互内容时仍拒绝整个选区。
- * 普通段落中的行内 code 是正文的一部分，允许和相邻文字一起翻译。
+ * 隐藏节点与 SVG 装饰直接跳过；覆盖输入控件等交互内容时仍拒绝整个 Range。
+ * 明确选中的代码块和行内 code 均可翻译；全文自动提取继续排除 pre。
  */
 function readRangeText(range: Range, doc: Document): string | null {
   const common = range.commonAncestorContainer;
@@ -289,18 +298,108 @@ function readRangeText(range: Range, doc: Document): string | null {
   return fragments.join('').trim() || null;
 }
 
-/** 检查整个选区，过滤装饰文本，并防止首尾正常但中间穿过代码或输入区域。 */
-export function readSelection(selection: Selection | null, doc: Document): SelectionSnapshot | null {
+/** 原生输入控件不暴露 Range，只读取浏览器明确标记的选中文字；密码等敏感类型始终拒绝。 */
+function readControlSelection(target: EventTarget | null | undefined, doc: Document): SelectionSnapshot | null {
+  const candidate = target instanceof Element ? target.closest('textarea,input') : doc.activeElement?.closest('textarea,input');
+  if (!(candidate instanceof HTMLInputElement || candidate instanceof HTMLTextAreaElement) || candidate.ownerDocument !== doc || !candidate.isConnected || candidate.disabled) return null;
+  if (candidate instanceof HTMLInputElement && !['text', 'search', 'url', 'tel', 'email'].includes(candidate.type)) return null;
+  const start = candidate.selectionStart;
+  const end = candidate.selectionEnd;
+  if (start === null || end === null || start >= end) return null;
+  const text = candidate.value.slice(start, end).trim();
+  return text ? { kind: 'control', text, control: candidate, start, end, documentUrl: doc.URL } : null;
+}
+
+/** 检查整个选区；富文本编辑器允许主动划词，整页提取仍继续排除编辑区域。 */
+export function readSelection(selection: Selection | null, doc: Document, target?: EventTarget | null): SelectionSnapshot | null {
+  const control = readControlSelection(target, doc);
+  if (control) return control;
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
   const range = selection.getRangeAt(0);
   if (!range.startContainer.isConnected || !range.endContainer.isConnected) return null;
   const text = readRangeText(range, doc);
-  return text ? { text, range: range.cloneRange(), documentUrl: doc.URL } : null;
+  const startRoot = editableRoot(range.startContainer);
+  const endRoot = editableRoot(range.endContainer);
+  return text ? { kind: 'range', text, range: range.cloneRange(), ...(startRoot && startRoot === endRoot ? { editableRoot: startRoot } : {}), documentUrl: doc.URL } : null;
+}
+
+/** 悬停快捷键将当前块构造成稳定选区快照，不改变网页的可见选区。 */
+export function readElementSelection(element: HTMLElement, doc: Document): SelectionSnapshot | null {
+  if (!element.isConnected || element.ownerDocument !== doc || element.closest(`[${OWNED}],input,textarea,select,button,iframe,canvas,object,embed`) || isHidden(element)) return null;
+  const range = doc.createRange();
+  range.selectNodeContents(element);
+  const text = readRangeText(range, doc);
+  const root = editableRoot(element);
+  return text ? { kind: 'range', text, range, ...(root ? { editableRoot: root } : {}), documentUrl: doc.URL } : null;
+}
+
+/** 从鼠标所在节点选择最小的自然语言块；普通 div 只在没有语义段落时作为兜底。 */
+export function findHoverParagraph(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof Element) || target.closest(`[${OWNED}],input,textarea,select,button,iframe,canvas,object,embed`)) return null;
+  const semantic = target.closest<HTMLElement>(`${BLOCKS},output,[contenteditable]:not([contenteditable="false"]),[role="textbox"]`);
+  if (semantic && !isHidden(semantic)) return semantic;
+  let candidate = target.closest<HTMLElement>('div,section,article,main');
+  while (candidate) {
+    if (!isHidden(candidate)) {
+      const text = normalizeText(candidate.textContent ?? '');
+      if (/\p{L}/u.test(text) && Array.from(text).length <= 2000) return candidate;
+    }
+    candidate = candidate.parentElement?.closest<HTMLElement>('div,section,article,main') ?? null;
+  }
+  return null;
+}
+
+export function canWriteSelection(snapshot: SelectionSnapshot): boolean {
+  return snapshot.kind === 'control' ? !snapshot.control.readOnly && !snapshot.control.disabled : Boolean(snapshot.editableRoot?.isConnected);
+}
+
+function inputEvent(doc: Document, type: 'beforeinput' | 'input', data: string, inputType: string, cancelable: boolean): Event {
+  const EventConstructor = doc.defaultView?.InputEvent;
+  return EventConstructor
+    ? new EventConstructor(type, { bubbles: true, composed: true, cancelable, data, inputType })
+    : new Event(type, { bubbles: true, cancelable });
+}
+
+/** 仅由结果窗按钮调用；尽量走浏览器编辑命令以保留编辑器撤销栈，失败时才做可观察的 DOM 兜底。 */
+export function writeSelection(snapshot: SelectionSnapshot, translated: string, action: 'replace' | 'insert', doc: Document): boolean {
+  if (!translated.trim() || !canWriteSelection(snapshot) || !selectionUnchanged(snapshot, doc)) return false;
+  if (snapshot.kind === 'control') {
+    const value = action === 'replace' ? translated : `${snapshot.control instanceof HTMLTextAreaElement ? '\n' : ' '}${translated}`;
+    const start = action === 'replace' ? snapshot.start : snapshot.end;
+    const end = action === 'replace' ? snapshot.end : snapshot.end;
+    if (!snapshot.control.dispatchEvent(inputEvent(doc, 'beforeinput', value, action === 'replace' ? 'insertReplacementText' : 'insertText', true))) return false;
+    snapshot.control.setRangeText(value, start, end, 'end');
+    snapshot.control.dispatchEvent(inputEvent(doc, 'input', value, action === 'replace' ? 'insertReplacementText' : 'insertText', false));
+    return true;
+  }
+  const range = snapshot.range.cloneRange();
+  if (action === 'insert') range.collapse(false);
+  const value = action === 'insert' ? `\n${translated}` : translated;
+  const selection = doc.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  if (typeof doc.execCommand === 'function' && doc.execCommand('insertText', false, value)) return true;
+  const root = snapshot.editableRoot!;
+  if (!root.dispatchEvent(inputEvent(doc, 'beforeinput', value, action === 'replace' ? 'insertReplacementText' : 'insertText', true))) return false;
+  if (action === 'replace') range.deleteContents();
+  const fragment = doc.createDocumentFragment();
+  if (action === 'insert') fragment.append(doc.createElement('br'));
+  const text = doc.createTextNode(translated);
+  fragment.append(text);
+  range.insertNode(fragment);
+  range.setStartAfter(text);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  root.dispatchEvent(inputEvent(doc, 'input', value, action === 'replace' ? 'insertReplacementText' : 'insertText', false));
+  return true;
 }
 
 /** DOM 原文和文档仍匹配时才展示异步结果。 */
 export function selectionUnchanged(snapshot: SelectionSnapshot, doc: Document): boolean {
-  return doc.URL === snapshot.documentUrl && snapshot.range.startContainer.isConnected && snapshot.range.endContainer.isConnected && readRangeText(snapshot.range, doc) === snapshot.text;
+  if (doc.URL !== snapshot.documentUrl) return false;
+  if (snapshot.kind === 'control') return snapshot.control.isConnected && snapshot.control.ownerDocument === doc && snapshot.control.value.slice(snapshot.start, snapshot.end).trim() === snapshot.text;
+  return snapshot.range.startContainer.isConnected && snapshot.range.endContainer.isConnected && readRangeText(snapshot.range, doc) === snapshot.text;
 }
 
 /** 封闭 ShadowRoot 隔离站点样式；所有文本由 textContent 写入。 */

@@ -1,4 +1,4 @@
-import { send, type AppError, type PageStatus, type Preferences, type ProviderId, type Reply } from '../shared/types';
+import { send, type AppError, type PageDisplayMode, type PageStatus, type Preferences, type ProviderId, type Reply } from '../shared/types';
 import { createHost, extractParagraphs, insertParagraphTranslation, isInViewport, isSameLanguage, OWNED, readParagraphSnapshot, restoreParagraphLiterals, splitText, type ParagraphFormat, type ParagraphSnapshot } from './dom';
 import { htmlLanguage } from '../shared/languages';
 
@@ -7,6 +7,7 @@ interface Paragraph { node: HTMLElement; snapshot: ParagraphSnapshot; state: Par
 interface Job {
   id: string; generation: number; preferences: Preferences; revision: number; url: string; active: boolean;
   scope: 'viewport' | 'expanded';
+  displayMode: PageDisplayMode;
   paragraphs: Paragraph[]; queue: Paragraph[]; inflight: Map<string, Promise<Reply<{ translated: string }>>>;
   running: number; observer?: IntersectionObserver; error?: AppError; ready: boolean; manuallyStopped?: boolean;
   byNode: Map<HTMLElement, Paragraph>; discoveryRoots: Set<Element>; discoveryObserver?: MutationObserver;
@@ -36,6 +37,48 @@ const FORMAT_MARKER = /\[\[YEBAN_FMT_\d+_\d+_(?:OPEN|CLOSE)\]\]/gu;
 const SAFE_FORMAT_TAGS = new Set(['a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'del', 'em', 'i', 'ins', 'kbd', 'mark', 'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'time', 'u', 'var']);
 
 interface OriginalTextStyle { text: Array<[string, string]>; box: Array<[string, string]>; margins: Array<[string, string]> }
+
+/** 临时样式仅在值仍由扩展持有时恢复，避免覆盖网页运行期间自己的更新。 */
+function temporaryStyles(element: HTMLElement, entries: Array<[string, string]>): () => void {
+  const originals = entries.map(([property, value]) => ({
+    property, value, original: element.style.getPropertyValue(property), priority: element.style.getPropertyPriority(property),
+  }));
+  for (const entry of originals) element.style.setProperty(entry.property, entry.value, 'important');
+  return () => {
+    for (const entry of originals) {
+      if (element.style.getPropertyValue(entry.property) !== entry.value || element.style.getPropertyPriority(entry.property) !== 'important') continue;
+      if (entry.original) element.style.setProperty(entry.property, entry.original, entry.priority);
+      else element.style.removeProperty(entry.property);
+    }
+  };
+}
+
+function applyDisplayMode(node: HTMLElement, host: HTMLElement, mode: PageDisplayMode): () => void {
+  if (mode === 'bilingual') return () => undefined;
+  const contained = node.contains(host);
+  if (mode === 'translation' || mode === 'hover') {
+    if (contained) {
+      const restoreOriginal = temporaryStyles(node, [['visibility', 'hidden']]);
+      const restoreTranslation = temporaryStyles(host, [['visibility', 'visible']]);
+      return () => { restoreTranslation(); restoreOriginal(); };
+    }
+    return temporaryStyles(node, [['display', 'none']]);
+  }
+  // 常规正文块保持原节点不换父级，用并排 inline-block 避免破坏站点直属子元素选择器。
+  if (!contained && node.parentElement === host.parentElement && (node.ownerDocument.defaultView?.innerWidth ?? 0) >= 900) {
+    const restoreOriginal = temporaryStyles(node, [
+      ['display', 'inline-block'], ['box-sizing', 'border-box'], ['width', 'calc(50% - 8px)'],
+      ['vertical-align', 'top'], ['margin-left', '0px'], ['margin-right', '0px'],
+    ]);
+    const restoreTranslation = temporaryStyles(host, [
+      ['display', 'inline-block'], ['box-sizing', 'border-box'], ['width', 'calc(50% - 8px)'],
+      ['vertical-align', 'top'], ['margin-left', '16px'], ['margin-right', '0px'],
+    ]);
+    return () => { restoreTranslation(); restoreOriginal(); };
+  }
+  // 表格单元格、列表和交互标签不能安全改变结构，保留上下对照以保证页面行为。
+  return () => undefined;
+}
 
 /** 固定原节点最终排版快照，避免译文插入后相邻选择器改变取值。 */
 function originalTextStyle(node: HTMLElement): OriginalTextStyle {
@@ -136,13 +179,13 @@ export class PageTranslator {
   canRestore(): boolean { return this.isActive() || this.translations.size > 0; }
 
   /** 固定当次设置，运行中相同操作保持幂等。 */
-  async start(preferences: Preferences, scope: 'viewport' | 'expanded' = 'viewport'): Promise<PageStatus> {
-    if (this.job?.active && this.job.url === this.doc.URL && this.job.scope === scope && JSON.stringify(this.job.preferences) === JSON.stringify(preferences)) return this.status();
+  async start(preferences: Preferences, scope: 'viewport' | 'expanded' = 'viewport', displayMode: PageDisplayMode = 'bilingual'): Promise<PageStatus> {
+    if (this.job?.active && this.job.url === this.doc.URL && this.job.scope === scope && this.job.displayMode === displayMode && JSON.stringify(this.job.preferences) === JSON.stringify(preferences)) return this.status();
     const generation = ++this.generation;
     await this.cancelCurrent();
     if (generation !== this.generation) return this.status();
     this.clearTranslations();
-    const job = this.createJob(preferences, generation, extractParagraphs(this.doc).map(node => ({ node, snapshot: readParagraphSnapshot(node), state: 'new' })), scope);
+    const job = this.createJob(preferences, generation, extractParagraphs(this.doc).map(node => ({ node, snapshot: readParagraphSnapshot(node), state: 'new' })), scope, displayMode);
     this.job = job;
     if (!job.paragraphs.length) {
       job.active = false;
@@ -190,7 +233,7 @@ export class PageTranslator {
     const generation = ++this.generation;
     await this.cancelCurrent();
     if (generation !== this.generation) return this.status();
-    const job = this.createJob(previous.preferences, generation, previous.paragraphs, previous.scope);
+    const job = this.createJob(previous.preferences, generation, previous.paragraphs, previous.scope, previous.displayMode);
     this.job = job;
     const reply = await send<{ revision: number }>({ type: 'BEGIN_JOB', mode: 'page', jobId: job.id, preferences: job.preferences });
     if (!this.isCurrent(job)) return this.status();
@@ -242,8 +285,8 @@ export class PageTranslator {
     return { state: 'waiting', completed, failed, pending: 0, message: job.scope === 'expanded' ? '当前已展开内容已翻译；展开其他菜单后会继续翻译。' : '当前可见内容已翻译，滚动后继续处理新段落。' };
   }
 
-  private createJob(preferences: Preferences, generation: number, paragraphs: Paragraph[], scope: 'viewport' | 'expanded'): Job {
-    return { id: crypto.randomUUID(), generation, preferences: { ...preferences }, scope, revision: 0, url: this.doc.URL, active: true, paragraphs, byNode: new Map(paragraphs.map(paragraph => [paragraph.node, paragraph])), queue: [], inflight: new Map(), running: 0, ready: false, discoveryRoots: new Set(), discovered: 0 };
+  private createJob(preferences: Preferences, generation: number, paragraphs: Paragraph[], scope: 'viewport' | 'expanded', displayMode: PageDisplayMode): Job {
+    return { id: crypto.randomUUID(), generation, preferences: { ...preferences }, scope, displayMode, revision: 0, url: this.doc.URL, active: true, paragraphs, byNode: new Map(paragraphs.map(paragraph => [paragraph.node, paragraph])), queue: [], inflight: new Map(), running: 0, ready: false, discoveryRoots: new Set(), discovered: 0 };
   }
 
   private isCurrent(job: Job): boolean { return this.job === job && job.active && job.generation === this.generation && this.doc.URL === job.url; }
@@ -281,20 +324,20 @@ export class PageTranslator {
       }, { rootMargin: '0px', threshold: 0 });
       for (const paragraph of job.paragraphs) if (paragraph.state === 'new') job.observer.observe(paragraph.node);
     }
-    this.watchMenus(job);
+    this.watchDynamicContent(job);
     for (const paragraph of job.paragraphs) if (job.scope === 'expanded' || isInViewport(paragraph.node)) this.enqueue(job, paragraph);
   }
 
-  /** 只在活动任务中监听菜单展开；不轮询整页，也不将翻译节点当作网页新增内容。 */
-  private watchMenus(job: Job): void {
+  /** 监听菜单展开与滚动加载的新正文；不轮询整页，也不将翻译节点当作网页新增内容。 */
+  private watchDynamicContent(job: Job): void {
     const owned = (node: Node): boolean => {
       const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
       return !!element?.closest(`[${OWNED}]`);
     };
-    const queue = (element: Element, includeDescendantMenus = false): void => {
+    const queue = (element: Element, allowContentRoot = false): void => {
       if (!this.isCurrent(job) || owned(element)) return;
       const root = element.closest(MENU_ROOTS) ?? element.closest('ul,ol');
-      const roots = root ? [root] : includeDescendantMenus ? [...element.querySelectorAll(MENU_ROOTS)] : [];
+      const roots = root ? [root] : allowContentRoot ? [element] : [...element.querySelectorAll(MENU_ROOTS)];
       for (const candidate of roots) {
         if (!candidate.isConnected || [...job.discoveryRoots].some(existing => existing.contains(candidate))) continue;
         for (const existing of job.discoveryRoots) if (candidate.contains(existing)) job.discoveryRoots.delete(existing);
@@ -318,8 +361,11 @@ export class PageTranslator {
         if (owned(record.target)) continue;
         const changed = [...record.addedNodes, ...record.removedNodes];
         if (record.type === 'childList' && changed.length && changed.every(owned)) continue;
-        if (record.target instanceof Element) queue(record.target, record.type === 'attributes');
-        for (const added of record.addedNodes) if (added instanceof Element && !owned(added)) queue(added, true);
+        if (record.type === 'attributes' && record.target instanceof Element) queue(record.target, true);
+        if (record.type === 'childList' && record.target instanceof Element && record.addedNodes.length && [...record.addedNodes].some(node => node.nodeType === Node.TEXT_NODE)) queue(record.target, true);
+        const addedElements = [...record.addedNodes].filter((node): node is Element => node instanceof Element && !owned(node));
+        if (addedElements.length > 1 && record.target instanceof Element) queue(record.target, true);
+        else for (const added of addedElements) queue(added, true);
       }
     });
     job.discoveryObserver.observe(this.doc.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-expanded', 'open'] });
@@ -327,7 +373,7 @@ export class PageTranslator {
     for (const root of [...this.doc.querySelectorAll(MENU_ROOTS)].slice(0, MAX_DISCOVERY_ROOTS)) queue(root);
   }
 
-  /** 发现范围限定为本批菜单容器，新增块仍只在进入视口后请求。 */
+  /** 发现范围限定为本批变更容器，新增块仍只在进入视口后请求。 */
   private discoverMenus(job: Job): void {
     if (!this.isCurrent(job)) return;
     const roots = [...job.discoveryRoots];
@@ -420,19 +466,32 @@ export class PageTranslator {
     const originalStyle = originalTextStyle(paragraph.node);
     const { host, shadow } = createHost(this.doc);
     const style = this.doc.createElement('style');
-    style.textContent = ':host{display:block!important;margin:.45em 0 0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;}.translation{display:block;margin:0;}a{cursor:pointer;}';
+    style.textContent = ':host{display:block!important;margin:.45em 0 0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;}.translation{display:block;margin:0;}.original-preview{display:none;margin:0 0 .4em;padding:0 0 .35em;border-bottom:1px dashed currentColor;opacity:.72;}.hover-view:hover .original-preview,.hover-view:focus-within .original-preview{display:block;}a{cursor:pointer;}';
+    const view = job.displayMode === 'hover' ? this.doc.createElement('div') : undefined;
+    if (view) {
+      view.className = 'hover-view';
+      view.tabIndex = 0;
+      view.setAttribute('aria-label', '译文；鼠标悬停或键盘聚焦时显示原文');
+      const original = this.doc.createElement('div');
+      original.className = 'original-preview';
+      original.textContent = paragraph.snapshot.naturalText;
+      applyStyles(originalStyle.text, original);
+      view.append(original);
+    }
     const translation = this.doc.createElement('div');
     translation.className = 'translation';
     if (!renderRichTranslation(this.doc, paragraph.snapshot, restored, translation)) { paragraph.state = 'failed'; return; }
     translation.lang = htmlLanguage(job.preferences.target);
     applyOriginalTextStyle(originalStyle, translation);
     for (const [key, value] of completedChunks) this.cache.set(key, value);
-    shadow.append(style, translation);
+    if (view) { view.append(translation); shadow.append(style, view); }
+    else shadow.append(style, translation);
     const cleanup = insertParagraphTranslation(paragraph.node, host);
     if (host.parentElement === paragraph.node.parentElement && paragraph.node.nextElementSibling === host) {
       for (const [property, value] of originalStyle.margins) host.style.setProperty(property, value, 'important');
     }
-    if (cleanup) this.translationCleanup.set(host, cleanup);
+    const displayCleanup = applyDisplayMode(paragraph.node, host, job.displayMode);
+    this.translationCleanup.set(host, () => { displayCleanup(); cleanup?.(); });
     paragraph.translation = host;
     this.translations.add(host);
     paragraph.state = 'done';

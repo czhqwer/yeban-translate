@@ -1,5 +1,5 @@
-import { DEFAULT_PREFERENCES, DEFAULT_SERVICES, SELECTION_LIMIT } from '../shared/types';
-import type { BackgroundMessage, ContentMessage, PageContext, Preferences, ProviderId, PublicSettings, Reply, ServiceInput, SidePanelState, TranslationMode } from '../shared/types';
+import { DEFAULT_HOVER_SHORTCUT, DEFAULT_PAGE_DISPLAY_MODE, DEFAULT_PREFERENCES, DEFAULT_SERVICES, SELECTION_LIMIT } from '../shared/types';
+import type { BackgroundMessage, ContentMessage, PageContext, PageDisplayMode, Preferences, ProviderId, PublicSettings, Reply, ServiceInput, SidePanelState, TranslationMode } from '../shared/types';
 import { cancelled, failure, invalid, TranslationError } from './errors';
 import { isConfigured, mergeService, translate, type ServiceConfig } from './providers';
 import { RequestPool } from './pool';
@@ -8,6 +8,7 @@ import { PANEL_PORT_NAME, type PanelCommand, type PanelResponse } from '../share
 import { SidePanelManager } from './side-panel-state';
 import { FloatingPositionStore } from './floating-position';
 import { isLanguageCode, isSourceLanguage } from '../shared/languages';
+import { normalizeShortcut } from '../shared/shortcuts';
 
 interface StoredSettings {
   preferences: Preferences;
@@ -18,6 +19,9 @@ interface StoredSettings {
   selectionEnabled: boolean;
   allSitesEnabled: boolean;
   blockedSites: string[];
+  pageDisplayMode: PageDisplayMode;
+  hoverTranslationEnabled: boolean;
+  hoverShortcut: string;
 }
 interface DocumentIdentity { tabId: number; frameId: number; documentId: string; origin: string }
 interface Job extends DocumentIdentity {
@@ -36,6 +40,7 @@ const CONTROL = 'yebanControl';
 const providers: ProviderId[] = [...DEFAULT_PRIORITY];
 const ALL_SITES = ['http://*/*', 'https://*/*'];
 const ALL_REGISTRATION = 'yeban-all-sites';
+const ALL_SITE_ALIASES = new Set([...ALL_SITES, '*://*/*', '<all_urls>']);
 
 function provider(value: unknown): ProviderId {
   if (value !== 'bailian' && value !== 'aliyun') invalid();
@@ -48,7 +53,11 @@ function preferences(value: unknown): Preferences {
   return { provider: provider(input.provider), source: input.source, target: input.target };
 }
 function mode(value: unknown): TranslationMode {
-  if (value !== 'page' && value !== 'selection') invalid();
+  if (value !== 'page' && value !== 'selection' && value !== 'hover') invalid();
+  return value;
+}
+function pageDisplayMode(value: unknown): PageDisplayMode {
+  if (value !== 'bilingual' && value !== 'translation' && value !== 'hover' && value !== 'parallel') invalid('请选择支持的页面展示模式。');
   return value;
 }
 function identifier(value: unknown): string {
@@ -63,6 +72,10 @@ function siteOrigin(value: unknown): string {
   return url.origin;
 }
 function matches(origin: string): string { return `${origin}/*`; }
+function originFromMatchPattern(value: unknown): string | undefined {
+  if (typeof value !== 'string' || ALL_SITE_ALIASES.has(value) || !value.endsWith('/*')) return undefined;
+  try { return siteOrigin(value.slice(0, -2)); } catch { return undefined; }
+}
 function registration(origin: string): string { return `yeban-site-${Array.from(new TextEncoder().encode(origin), n => n.toString(16).padStart(2, '0')).join('')}`; }
 function jobName(doc: DocumentIdentity, kind: TranslationMode, id: string): string { return `${doc.tabId}/${doc.frameId}/${doc.documentId}/${kind}/${id}`; }
 function sameDocument(a: DocumentIdentity, b: DocumentIdentity): boolean { return a.tabId === b.tabId && a.frameId === b.frameId && a.documentId === b.documentId; }
@@ -106,11 +119,14 @@ export class BackgroundApp {
     this.settings = stored ?? { preferences: { ...DEFAULT_PREFERENCES }, services: {
       bailian: { endpoint: DEFAULT_SERVICES.bailian.endpoint, model: DEFAULT_SERVICES.bailian.model, version: 0 },
       aliyun: { endpoint: DEFAULT_SERVICES.aliyun.endpoint, version: 0 },
-    }, sites: [], dataNoticeAccepted: false, providerPriority: [...DEFAULT_PRIORITY], selectionEnabled: true, allSitesEnabled: false, blockedSites: [] };
+    }, sites: [], dataNoticeAccepted: false, providerPriority: [...DEFAULT_PRIORITY], selectionEnabled: true, allSitesEnabled: false, blockedSites: [], pageDisplayMode: DEFAULT_PAGE_DISPLAY_MODE, hoverTranslationEnabled: false, hoverShortcut: DEFAULT_HOVER_SHORTCUT };
     this.settings.providerPriority = normalizePriority(stored?.providerPriority, stored?.preferences.provider);
     this.settings.selectionEnabled = stored?.selectionEnabled !== false;
     this.settings.allSitesEnabled = stored?.allSitesEnabled === true;
     this.settings.blockedSites = Array.isArray(stored?.blockedSites) ? stored.blockedSites.filter(origin => { try { return siteOrigin(origin) === origin; } catch { return false; } }) : [];
+    this.settings.pageDisplayMode = stored?.pageDisplayMode && ['bilingual', 'translation', 'hover', 'parallel'].includes(stored.pageDisplayMode) ? stored.pageDisplayMode : DEFAULT_PAGE_DISPLAY_MODE;
+    this.settings.hoverTranslationEnabled = stored?.hoverTranslationEnabled === true;
+    this.settings.hoverShortcut = normalizeShortcut(stored?.hoverShortcut ?? '') ?? DEFAULT_HOVER_SHORTCUT;
     const prior = (await this.api.storage.session.get(CONTROL))[CONTROL] as ControlState | undefined;
     this.controls = prior ?? { jobs: {}, cooldown: { bailian: 0, aliyun: 0 }, revisions: { bailian: 0, aliyun: 0 } };
     // Worker 重启不恢复请求正文，也不重放结果未知的请求。
@@ -235,13 +251,13 @@ export class BackgroundApp {
     port.onMessage.addListener(onMessage);
   }
 
-  private document(sender: chrome.runtime.MessageSender): DocumentIdentity {
-    if (sender.id !== this.api.runtime.id || !Number.isInteger(sender.tab?.id) || sender.frameId !== 0 || typeof sender.documentId !== 'string' || !sender.documentId || sender.documentLifecycle && sender.documentLifecycle !== 'active') throw new TranslationError('FORBIDDEN', '当前页面无权执行此操作。');
+  private document(sender: chrome.runtime.MessageSender, allowChild = false): DocumentIdentity {
+    if (sender.id !== this.api.runtime.id || !Number.isInteger(sender.tab?.id) || sender.tab!.id! < 0 || !Number.isInteger(sender.frameId) || sender.frameId! < 0 || !allowChild && sender.frameId !== 0 || typeof sender.documentId !== 'string' || !sender.documentId || sender.documentLifecycle && sender.documentLifecycle !== 'active') throw new TranslationError('FORBIDDEN', '当前页面无权执行此操作。');
     let url: URL;
     try { url = new URL(sender.url ?? ''); } catch { throw new TranslationError('FORBIDDEN', '当前页面地址不可用。'); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new TranslationError('FORBIDDEN', '当前页面不支持翻译。');
     if (sender.origin && sender.origin !== url.origin) throw new TranslationError('FORBIDDEN', '页面来源校验失败，请刷新后重试。');
-    return { tabId: sender.tab!.id!, frameId: 0, documentId: sender.documentId, origin: url.origin };
+    return { tabId: sender.tab!.id!, frameId: sender.frameId!, documentId: sender.documentId, origin: url.origin };
   }
 
   private publicSettings(): PublicSettings {
@@ -249,6 +265,7 @@ export class BackgroundApp {
       preferences: { ...this.settings.preferences }, sites: [...this.settings.sites], dataNoticeAccepted: this.settings.dataNoticeAccepted,
       providerPriority: [...this.settings.providerPriority], selectionEnabled: this.settings.selectionEnabled,
       allSitesEnabled: this.settings.allSitesEnabled, allSitesGranted: this.allSitesGranted, blockedSites: [...this.settings.blockedSites],
+      pageDisplayMode: this.settings.pageDisplayMode, hoverTranslationEnabled: this.settings.hoverTranslationEnabled, hoverShortcut: this.settings.hoverShortcut,
       services: {
         bailian: { endpoint: this.settings.services.bailian.endpoint, model: this.settings.services.bailian.model, configured: isConfigured('bailian', this.settings.services.bailian) },
         aliyun: { endpoint: this.settings.services.aliyun.endpoint, configured: isConfigured('aliyun', this.settings.services.aliyun) },
@@ -259,11 +276,19 @@ export class BackgroundApp {
   }
 
   private async pageContext(doc: DocumentIdentity, sender: chrome.runtime.MessageSender): Promise<PageContext> {
+    if (doc.frameId !== 0) await this.assertChildAccess(doc);
     const state = this.publicSettings();
     const enabled = await this.siteEnabled(doc.origin);
-    const floatingEnabled = await this.canUseFloating(doc, enabled);
-    const sidePanel = await this.getSidePanelState({ tabId: doc.tabId }, sender);
-    return { preferences: state.preferences, services: state.services, providerPriority: state.providerPriority, dataNoticeAccepted: state.dataNoticeAccepted, selectionEnabled: this.settings.selectionEnabled && enabled, floatingEnabled, floatingPosition: this.floatingPosition.value(), sidePanel };
+    const floatingEnabled = doc.frameId === 0 && await this.canUseFloating(doc, enabled);
+    const sidePanel = doc.frameId === 0 ? await this.getSidePanelState({ tabId: doc.tabId }, sender) : undefined;
+    return {
+      preferences: state.preferences, services: state.services, providerPriority: state.providerPriority,
+      dataNoticeAccepted: state.dataNoticeAccepted, selectionEnabled: this.settings.selectionEnabled && enabled,
+      floatingEnabled, floatingPosition: this.floatingPosition.value(), sidePanel,
+      pageDisplayMode: this.settings.pageDisplayMode,
+      hoverTranslationEnabled: this.settings.hoverTranslationEnabled && enabled,
+      hoverShortcut: this.settings.hoverShortcut,
+    };
   }
 
   /** 浮球位置操作沿用浮球显示权限，兼容工具栏授予的当前文档临时权限。 */
@@ -289,6 +314,15 @@ export class BackgroundApp {
   private async siteEnabled(origin: string): Promise<boolean> {
     if (this.settings.blockedSites.includes(origin) || (!this.settings.allSitesEnabled && !this.settings.sites.includes(origin))) return false;
     return this.api.permissions.contains({ origins: [matches(origin)] });
+  }
+
+  /** 子页面只使用已授权顶层网站的同源权限；跨站嵌入和不透明来源继续拒绝。 */
+  private async assertChildAccess(doc: DocumentIdentity): Promise<void> {
+    let tab: chrome.tabs.Tab;
+    try { tab = await this.api.tabs.get(doc.tabId); } catch { throw new TranslationError('FORBIDDEN', '当前笔记页面已关闭。'); }
+    let topOrigin: string;
+    try { topOrigin = new URL(tab.url ?? '').origin; } catch { throw new TranslationError('FORBIDDEN', '无法核实笔记所在网站。'); }
+    if (topOrigin !== doc.origin || !await this.siteEnabled(doc.origin)) throw new TranslationError('FORBIDDEN', '内嵌页面需要与已授权的网站同源。');
   }
 
   /** 页面只能操作浏览器 sender 对应标签；UI 使用先前核实的 tab → window 缓存。 */
@@ -369,7 +403,7 @@ export class BackgroundApp {
       let value: unknown;
       switch (message.type) {
         case 'GET_SETTINGS': this.allSitesGranted = await this.api.permissions.contains({ origins: ALL_SITES }); value = this.publicSettings(); break;
-        case 'GET_CONTEXT': value = await this.pageContext(this.document(sender), sender); break;
+        case 'GET_CONTEXT': value = await this.pageContext(this.document(sender, true), sender); break;
         case 'SET_FLOATING_POSITION': value = await this.setFloatingPosition(this.document(sender), message.position); break;
         case 'GET_SIDE_PANEL_STATE': value = await this.getSidePanelState(message, sender); break;
         case 'SAVE_SETTINGS': value = await this.exclusive(() => this.save(message)); await this.notifyAll({ type: 'FEATURES_CHANGED' }); break;
@@ -397,7 +431,7 @@ export class BackgroundApp {
         case 'DISABLE_ALL_SITES': {
           await this.exclusive(async () => {
             this.settings.allSitesEnabled = false;
-            for (const [name, job] of Object.entries(this.controls.jobs)) if (job.mode === 'selection') this.stopJob(name, job, 'PERMISSION');
+            for (const [name, job] of Object.entries(this.controls.jobs)) if (job.mode === 'selection' || job.mode === 'hover') this.stopJob(name, job, 'PERMISSION');
             await this.persistControl();
             await this.reconcileSites();
           });
@@ -419,10 +453,10 @@ export class BackgroundApp {
           await this.notifyAll({ type: 'SITE_CHANGED', enabled: false }, origin);
           break;
         }
-        case 'BEGIN_JOB': value = await this.exclusive(() => this.begin(this.document(sender), mode(message.mode), identifier(message.jobId), preferences(message.preferences))); break;
-        case 'CANCEL_JOB': value = await this.exclusive(() => this.cancel(this.document(sender), mode(message.mode), message.jobId === undefined ? undefined : identifier(message.jobId))); break;
+        case 'BEGIN_JOB': value = await this.exclusive(() => this.begin(this.document(sender, message.mode === 'selection' || message.mode === 'hover'), mode(message.mode), identifier(message.jobId), preferences(message.preferences))); break;
+        case 'CANCEL_JOB': value = await this.exclusive(() => this.cancel(this.document(sender, message.mode === 'selection' || message.mode === 'hover'), mode(message.mode), message.jobId === undefined ? undefined : identifier(message.jobId))); break;
         case 'TRANSLATE': {
-          const document = this.document(sender);
+          const document = this.document(sender, message.mode === 'selection' || message.mode === 'hover');
           const request = await this.exclusive(() => this.enqueue(document, mode(message.mode), identifier(message.jobId), identifier(message.itemId), message.text));
           value = await request.promise;
           break;
@@ -444,6 +478,17 @@ export class BackgroundApp {
       if (typeof message.selectionEnabled !== 'boolean') invalid();
       next.selectionEnabled = message.selectionEnabled;
     }
+    if (message.pageDisplayMode !== undefined) next.pageDisplayMode = pageDisplayMode(message.pageDisplayMode);
+    if (message.hoverTranslationEnabled !== undefined) {
+      if (typeof message.hoverTranslationEnabled !== 'boolean') invalid();
+      next.hoverTranslationEnabled = message.hoverTranslationEnabled;
+    }
+    if (message.hoverShortcut !== undefined) {
+      if (typeof message.hoverShortcut !== 'string') invalid();
+      const shortcut = normalizeShortcut(message.hoverShortcut);
+      if (!shortcut) invalid('快捷键需要包含 Ctrl、Alt 或 Meta，并搭配一个字母、数字或功能键。');
+      next.hoverShortcut = shortcut;
+    }
     if (message.dataNoticeAccepted !== undefined) {
       if (typeof message.dataNoticeAccepted !== 'boolean') invalid();
       next.dataNoticeAccepted = message.dataNoticeAccepted;
@@ -456,6 +501,7 @@ export class BackgroundApp {
     if (changed) this.stopProvider(changed, 'CONFIG_CHANGED');
     if (!next.dataNoticeAccepted) for (const id of providers) this.stopProvider(id, 'CONSENT');
     if (!next.selectionEnabled) for (const [name, job] of Object.entries(this.controls.jobs)) if (job.mode === 'selection') this.stopJob(name, job, 'FEATURE_DISABLED');
+    if (!next.hoverTranslationEnabled) for (const [name, job] of Object.entries(this.controls.jobs)) if (job.mode === 'hover') this.stopJob(name, job, 'FEATURE_DISABLED');
     this.settings = next;
     if (changed) this.controls.revisions[changed] = next.services[changed].version;
     await this.persistControl();
@@ -501,6 +547,7 @@ export class BackgroundApp {
     try { currentOrigin = new URL(tab.url).origin; } catch { throw cancelled(); }
     if (currentOrigin !== job.origin) throw cancelled();
     if (job.mode === 'selection' && (!this.settings.selectionEnabled || !await this.siteEnabled(job.origin))) throw new TranslationError('PERMISSION', '此网站尚未启用划词翻译，请先授权。');
+    if (job.mode === 'hover' && (!this.settings.hoverTranslationEnabled || !await this.siteEnabled(job.origin))) throw new TranslationError('PERMISSION', '此网站尚未启用鼠标悬停翻译，请先在设置页开启并授权。');
     // 在准确的 documentId 上做无数据脚本探测，同时验证 activeTab / 站点授权与文档仍然存活。
     try {
       const result = await this.api.scripting.executeScript({ target: { tabId: job.tabId, documentIds: [job.documentId] }, func: () => true });
@@ -546,7 +593,7 @@ export class BackgroundApp {
   private async enqueue(doc: DocumentIdentity, kind: TranslationMode, id: string, itemId: string, text: unknown): Promise<{ promise: Promise<{ translated: string }> }> {
     if (typeof text !== 'string' || !text.trim()) invalid('没有可翻译的文本。');
     const length = Array.from(text).length;
-    if (length > (kind === 'selection' ? SELECTION_LIMIT : 4999)) invalid(kind === 'selection' ? '选中文本过长，请缩小到 2000 个字符以内。' : '段落过长，请缩小翻译范围。');
+    if (length > (kind === 'page' ? 4999 : SELECTION_LIMIT)) invalid(kind === 'selection' ? '选中文本过长，请缩小到 2000 个字符以内。' : '当前段落过长，请缩小翻译范围。');
     const name = jobName(doc, kind, id);
     const job = this.controls.jobs[name];
     if (!job || !sameDocument(job, doc) || job.origin !== doc.origin || job.stopped) throw cancelled();
@@ -680,7 +727,7 @@ export class BackgroundApp {
       if (tab.id === undefined) continue;
       if (!await this.siteEnabled(origin)) return;
       try {
-        await this.api.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        await this.api.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['content.js'] });
         await this.api.tabs.sendMessage(tab.id, { type: 'SITE_CHANGED', enabled: await this.siteEnabled(origin) } satisfies ContentMessage);
       } catch { /* 尚在导航或不可注入的标签页，在下次加载时使用注册脚本。 */ }
     }
@@ -693,14 +740,14 @@ export class BackgroundApp {
       let origin: string;
       try { const url = new URL(tab.url); origin = siteOrigin(url.origin); } catch { continue; }
       if (!await this.siteEnabled(origin)) continue;
-      try { await this.api.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] }); } catch { /* 不可注入的标签页下次导航时重试。 */ }
+      try { await this.api.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['content.js'] }); } catch { /* 不可注入的标签页下次导航时重试。 */ }
     }
   }
 
   private async disableSite(origin: string): Promise<PublicSettings> {
     this.settings.sites = this.settings.sites.filter(site => site !== origin);
     if (!this.settings.blockedSites.includes(origin)) this.settings.blockedSites.push(origin);
-    for (const [name, job] of Object.entries(this.controls.jobs)) if (job.origin === origin && job.mode === 'selection') this.stopJob(name, job, 'PERMISSION');
+    for (const [name, job] of Object.entries(this.controls.jobs)) if (job.origin === origin && (job.mode === 'selection' || job.mode === 'hover')) this.stopJob(name, job, 'PERMISSION');
     await this.persistControl();
     await this.reconcileSites();
     return this.publicSettings();
@@ -715,9 +762,9 @@ export class BackgroundApp {
     }
     const registered = await this.api.scripting.getRegisteredContentScripts();
     const desired: chrome.scripting.RegisteredContentScript[] = this.settings.allSitesEnabled
-      ? [{ id: ALL_REGISTRATION, js: ['content.js'], matches: [...ALL_SITES], excludeMatches: this.settings.blockedSites.map(matches), persistAcrossSessions: true, allFrames: false, runAt: 'document_idle' }]
-      : valid.filter(origin => !this.settings.blockedSites.includes(origin)).map(origin => ({ id: registration(origin), js: ['content.js'], matches: [matches(origin)], persistAcrossSessions: true, allFrames: false, runAt: 'document_idle' }));
-    const identical = (a: chrome.scripting.RegisteredContentScript, b: chrome.scripting.RegisteredContentScript) => JSON.stringify(a.matches ?? []) === JSON.stringify(b.matches ?? []) && JSON.stringify(a.excludeMatches ?? []) === JSON.stringify(b.excludeMatches ?? []);
+      ? [{ id: ALL_REGISTRATION, js: ['content.js'], matches: [...ALL_SITES], excludeMatches: this.settings.blockedSites.map(matches), persistAcrossSessions: true, allFrames: true, runAt: 'document_idle' }]
+      : valid.filter(origin => !this.settings.blockedSites.includes(origin)).map(origin => ({ id: registration(origin), js: ['content.js'], matches: [matches(origin)], persistAcrossSessions: true, allFrames: true, runAt: 'document_idle' }));
+    const identical = (a: chrome.scripting.RegisteredContentScript, b: chrome.scripting.RegisteredContentScript) => JSON.stringify(a.matches ?? []) === JSON.stringify(b.matches ?? []) && JSON.stringify(a.excludeMatches ?? []) === JSON.stringify(b.excludeMatches ?? []) && a.allFrames === b.allFrames && a.runAt === b.runAt && JSON.stringify(a.js ?? []) === JSON.stringify(b.js ?? []);
     const obsolete = registered.filter(script => (script.id.startsWith('yeban-site-') || script.id === ALL_REGISTRATION) && !desired.some(wanted => wanted.id === script.id && identical(wanted, script))).map(script => script.id);
     if (obsolete.length) await this.api.scripting.unregisterContentScripts({ ids: obsolete });
     const missing = desired.filter(script => !registered.some(existing => existing.id === script.id && identical(existing, script)));
@@ -734,6 +781,33 @@ export class BackgroundApp {
     }
   }
 
+  /** Chrome 的授权框会关闭工具栏弹窗；后台在权限新增后完成启用，避免用户再次点击。 */
+  async permissionsAdded(permissions: chrome.permissions.Permissions): Promise<void> {
+    await this.ready;
+    const patterns = Array.isArray(permissions.origins) ? permissions.origins : [];
+    const activated = await this.exclusive(async () => {
+      const allGranted = await this.api.permissions.contains({ origins: ALL_SITES });
+      if (allGranted && patterns.some(pattern => ALL_SITE_ALIASES.has(pattern))) {
+        this.settings.allSitesEnabled = true;
+        await this.reconcileSites();
+        return { allSites: true, origins: [] as string[] };
+      }
+      const candidates = [...new Set(patterns.map(originFromMatchPattern).filter((origin): origin is string => Boolean(origin)))];
+      const origins: string[] = [];
+      for (const origin of candidates) {
+        if (!await this.api.permissions.contains({ origins: [matches(origin)] })) continue;
+        origins.push(origin);
+        this.settings.blockedSites = this.settings.blockedSites.filter(blocked => blocked !== origin);
+        if (!this.settings.allSitesEnabled && !this.settings.sites.includes(origin)) this.settings.sites.push(origin);
+      }
+      if (origins.length) await this.reconcileSites();
+      return { allSites: false, origins };
+    });
+    if (activated.allSites) await this.injectEligibleTabs();
+    else for (const origin of activated.origins) await this.injectSite(origin);
+    if (activated.allSites || activated.origins.length) await this.notifyAll({ type: 'FEATURES_CHANGED' });
+  }
+
   /** 权限撤销事件必须撤销任务和注册；不申请新权限。 */
   async permissionsRemoved(): Promise<void> {
     await this.ready;
@@ -743,7 +817,7 @@ export class BackgroundApp {
       await this.reconcileSites();
       for (const [name, job] of Object.entries(this.controls.jobs)) {
         const granted = await this.api.permissions.contains({ origins: [matches(job.origin)] });
-        if (!granted || job.mode === 'selection' && (!this.settings.selectionEnabled || !await this.siteEnabled(job.origin))) {
+        if (!granted || job.mode === 'selection' && (!this.settings.selectionEnabled || !await this.siteEnabled(job.origin)) || job.mode === 'hover' && (!this.settings.hoverTranslationEnabled || !await this.siteEnabled(job.origin))) {
           this.stopJob(name, job, 'PERMISSION');
           if (!origins.includes(job.origin)) origins.push(job.origin);
         }

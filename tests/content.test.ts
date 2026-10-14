@@ -59,6 +59,52 @@ describe('网页翻译可观察行为', () => {
     expect(host.style.marginLeft).toBe(expected.marginLeft);
   });
 
+  it('仅显示译文会临时隐藏原文，恢复原文时精确还原页面节点', async () => {
+    document.body.innerHTML = '<article><p id="source" style="display:block">Translation-only source.</p></article>';
+    const source = document.querySelector<HTMLElement>('#source')!;
+    await translator.start(preferences, 'expanded', 'translation');
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    expect(source.style.getPropertyValue('display')).toBe('none');
+    expect(source.style.getPropertyPriority('display')).toBe('important');
+    expect(document.querySelector(`[${OWNED}]`)).toBeTruthy();
+    await translator.restore();
+    expect(source.style.getPropertyValue('display')).toBe('block');
+    expect(document.querySelector(`[${OWNED}]`)).toBeNull();
+  });
+
+  it('悬停显示原文模式默认隐藏网页原文，并在译文内部提供悬停及键盘可访问预览', async () => {
+    document.body.innerHTML = '<article><p id="source">Hover original source.</p></article>';
+    const shadows = new WeakMap<Element, ShadowRoot>();
+    const attach = Element.prototype.attachShadow;
+    vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (this: Element, init) { const shadow = attach.call(this, init); shadows.set(this, shadow); return shadow; });
+    await translator.start(preferences, 'expanded', 'hover');
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    const source = document.querySelector<HTMLElement>('#source')!;
+    const host = document.querySelector<HTMLElement>(`[${OWNED}]`)!;
+    const shadow = shadows.get(host)!;
+    expect(source.style.display).toBe('none');
+    expect(shadow.querySelector('.original-preview')?.textContent).toBe('Hover original source.');
+    expect(shadow.querySelector<HTMLElement>('.hover-view')?.tabIndex).toBe(0);
+    expect(shadow.querySelector('style')?.textContent).toContain('.hover-view:hover .original-preview');
+  });
+
+  it('左右对照不移动原网页节点，普通正文各占半宽，恢复后清理临时布局', async () => {
+    document.body.innerHTML = '<article><p id="source">Parallel source paragraph.</p></article>';
+    const source = document.querySelector<HTMLElement>('#source')!;
+    const parent = source.parentElement;
+    await translator.start(preferences, 'expanded', 'parallel');
+    await vi.waitFor(() => expect(translator.status().completed).toBe(1));
+    const host = document.querySelector<HTMLElement>(`[${OWNED}]`)!;
+    expect(source.parentElement).toBe(parent);
+    expect(host.parentElement).toBe(parent);
+    expect(source.style.width).toBe('calc(50% - 8px)');
+    expect(host.style.width).toBe('calc(50% - 8px)');
+    expect(host.style.marginLeft).toBe('16px');
+    await translator.restore();
+    expect(source.style.width).toBe('');
+    expect(source.style.display).toBe('');
+  });
+
   it('译文安全保留提示框、链接、粗体与行内代码格式，并让各处文字颜色稍淡', async () => {
     document.body.innerHTML = '<main><p id="notice" style="color:rgb(20, 30, 40);background-color:rgb(245, 246, 240);border-left:4px solid rgb(255, 80, 100);padding:8px 12px">Read the <strong style="color:rgb(50, 60, 70)">important guide</strong>, open <a href="/stable" style="color:rgb(0, 90, 200)">stable version</a>, then call <code>enableCheckpointing(n)</code>.</p></main>';
     const shadows = new WeakMap<Element, ShadowRoot>();

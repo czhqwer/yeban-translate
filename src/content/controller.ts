@@ -1,8 +1,9 @@
 import { defaultSelection, resolvePreferences } from '../shared/services';
-import { send, type AppError, type ContentMessage, type PageContext, type PageStatus, type Reply, type SidePanelState, type TranslationSelection } from '../shared/types';
+import { DEFAULT_HOVER_SHORTCUT, DEFAULT_PAGE_DISPLAY_MODE, send, type AppError, type ContentMessage, type PageContext, type PageStatus, type Reply, type SidePanelState, type TranslationSelection } from '../shared/types';
 import { FloatingTranslator } from './floating';
 import { PageTranslator } from './page';
 import { SelectionTranslator } from './selection';
+import { HoverTranslator } from './hover';
 
 /** 当前文档只保存用户选择意图；自动服务在每次新任务时按最新顺序解析。 */
 export class ContentController {
@@ -10,6 +11,7 @@ export class ContentController {
   private readonly page: PageTranslator;
   private readonly selection: SelectionTranslator;
   private readonly floating: FloatingTranslator;
+  private readonly hover: HoverTranslator;
   private selected?: TranslationSelection;
   private taskSelection?: TranslationSelection;
   private context?: PageContext;
@@ -28,6 +30,7 @@ export class ContentController {
   constructor(doc: Document) {
     this.page = new PageTranslator(doc);
     this.selection = new SelectionTranslator(doc, () => this.selected);
+    this.hover = new HoverTranslator(doc, element => this.selection.translateElement(element));
     this.floating = new FloatingTranslator(doc, {
       start: () => this.startPage(),
       restore: () => this.handle({ type: 'RESTORE' }), status: () => this.status(),
@@ -47,7 +50,7 @@ export class ContentController {
       ...status,
       ...(actual ? { preferences: { ...actual } } : {}),
       ...(selected ? { selection: { ...selected } } : {}),
-      ...(preparing ? { state: 'running' as const, message: '正在准备全文翻译…' } : {}),
+      ...(preparing ? { state: 'running' as const, message: '正在准备按滚动翻译…' } : {}),
       canRestore: preparing || this.page.canRestore(),
       ...(this.panelState ? { sidePanel: { ...this.panelState, ready: this.panelState.ready && !this.panelNeedsContext } } : {}),
       ...(this.actionError ? { actionError: { ...this.actionError } } : {}),
@@ -116,7 +119,8 @@ export class ContentController {
     this.contextGeneration++;
     this.nextForeignWindow = undefined;
     this.floating.destroy();
-    await Promise.all([this.page.stop(), this.selection.setEnabled(false)]);
+    this.hover.destroy();
+    await Promise.all([this.page.stop(), this.selection.setEnabled(false), this.selection.setHoverEnabled(false)]);
   }
 
   private async loadContext(): Promise<Reply<PageContext>> {
@@ -125,6 +129,8 @@ export class ContentController {
     if (generation !== this.contextGeneration) return reply;
     if (!reply.ok) {
       await this.selection.setEnabled(false);
+      this.hover.setEnabled(false);
+      await this.selection.setHoverEnabled(false);
       if (generation === this.contextGeneration) this.floating.setEnabled(false);
       return reply;
     }
@@ -134,7 +140,11 @@ export class ContentController {
     }
     this.floating.setInitialPosition(reply.value.floatingPosition);
     this.context = { ...reply.value, ...(this.panelState ? { sidePanel: { ...this.panelState } } : {}) };
-    await this.selection.setEnabled(reply.value.selectionEnabled);
+    await Promise.all([
+      this.selection.setEnabled(reply.value.selectionEnabled),
+      this.selection.setHoverEnabled(reply.value.hoverTranslationEnabled === true),
+    ]);
+    this.hover.setEnabled(reply.value.hoverTranslationEnabled === true, reply.value.hoverShortcut ?? DEFAULT_HOVER_SHORTCUT);
     if (generation === this.contextGeneration) this.floating.setEnabled(reply.value.floatingEnabled === true);
     return reply;
   }
@@ -154,7 +164,7 @@ export class ContentController {
       if (!actual) return this.reject('CONFIG', '没有可用的翻译服务，请在页伴翻译设置中配置服务。');
       if (!context.value.dataNoticeAccepted) return this.reject('CONSENT', '请先在页伴翻译设置中确认文本发送说明。');
       this.taskSelection = selected ?? defaultSelection(context.value);
-      await this.page.start(actual, 'expanded');
+      await this.page.start(actual, 'viewport', context.value.pageDisplayMode ?? DEFAULT_PAGE_DISPLAY_MODE);
       return { ok: true, value: this.status() };
     } catch { return this.reject('PAGE_ERROR', '当前页面暂时无法处理翻译，请刷新页面后重试。', true); }
     finally { if (this.preparingPage === generation) this.preparingPage = undefined; this.floating.refresh(); }

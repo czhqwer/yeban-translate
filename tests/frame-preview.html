@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>页伴翻译 · iframe 划词验收</title>
+<style>body{margin:0;background:#f7f5ef;color:#20382f;font:15px/1.7 system-ui}main{padding:24px}h1{font-size:22px}.frames{display:flex;gap:20px;flex-wrap:wrap}iframe{width:460px;height:480px;border:1px solid #cbd6cd;border-radius:12px;background:white}section{max-width:100%}h2{font-size:16px}</style>
+<script src="/ui-preview.js"></script><script defer src="/content.js"></script></head>
+<body><main><h1>同源 iframe 划词验收</h1><p>仅使用虚拟文本与模拟翻译响应；每个子页面独立显示划词结果，整页只保留一组浮球。</p>
+<div class="frames"><section><h2>Markdown 预览</h2><iframe id="markdown-frame" title="Markdown 预览测试" src="/frame-content.html"></iframe></section><section><h2>另一个同源编辑器</h2><iframe id="editor-frame" title="富文本测试" src="/frame-content.html"></iframe></section></div></main></body></html>

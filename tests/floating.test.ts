@@ -134,14 +134,29 @@ describe('浮球入口与文档控制', () => {
     expect(controller.status().preferences?.provider).toBe('aliyun');
   });
 
-  it('主按钮翻译已展开的屏外正文，隐藏内容仍不发送且同按钮可恢复', async () => {
+  it('主按钮只翻译可见正文，滚动到屏外段落后才发送且同按钮可恢复', async () => {
     await controller.ready;
     document.body.innerHTML = '<main><p>Visible paragraph.</p><p id="below">Expanded offscreen paragraph.</p><p hidden>Hidden paragraph.</p></main>';
-    Object.defineProperty(document.querySelector('#below'), 'getBoundingClientRect', { configurable: true, value: () => ({ ...rect, top: 4000, bottom: 4020 }) });
+    let observer!: { enter: (target: Element) => void };
+    class TestObserver {
+      constructor(private readonly callback: IntersectionObserverCallback) { observer = this; }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      enter(target: Element): void { this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
+    }
+    vi.stubGlobal('IntersectionObserver', TestObserver);
+    const below = document.querySelector('#below')!;
+    let visible = false;
+    Object.defineProperty(below, 'getBoundingClientRect', { configurable: true, value: () => visible ? rect : ({ ...rect, top: 4000, bottom: 4020 }) });
     clickMain();
+    await vi.waitFor(() => expect(controller.status().completed).toBe(1));
+    expect(request.mock.calls.filter(([message]) => message.type === 'TRANSLATE').map(([message]) => message.text)).toEqual(['Visible paragraph.']);
+    expect(controller.status().message).toContain('滚动');
+    visible = true;
+    observer.enter(below);
     await vi.waitFor(() => expect(controller.status().completed).toBe(2));
     expect(request.mock.calls.filter(([message]) => message.type === 'TRANSLATE').map(([message]) => message.text)).toEqual(['Visible paragraph.', 'Expanded offscreen paragraph.']);
-    expect(controller.status().message).not.toContain('滚动');
     expect(controller.status().canRestore).toBe(true);
     clickMain();
     await vi.waitFor(() => expect(controller.status().canRestore).toBe(false));

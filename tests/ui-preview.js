@@ -9,6 +9,7 @@
       aliyun: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', configured: !empty },
     },
     sites: [], dataNoticeAccepted: !empty, providerPriority: ['aliyun', 'bailian'], selectionEnabled: true,
+    pageDisplayMode: 'bilingual', hoverTranslationEnabled: false, hoverShortcut: 'Alt+I',
     allSitesEnabled: false, allSitesGranted: false, blockedSites: [],
   };
   let page = { state: 'idle', completed: 0, failed: 0, pending: 0 };
@@ -58,7 +59,7 @@
       openOptionsPage: async () => { location.href = '/options.html'; },
       sendMessage: async msg => {
         if (msg.type === 'GET_SETTINGS') return ok(copy(settings));
-        if (msg.type === 'GET_CONTEXT') return ok({ preferences: copy(settings.preferences), services: copy(settings.services), providerPriority: [...settings.providerPriority], selectionEnabled: settings.selectionEnabled, floatingEnabled: true, floatingPosition, dataNoticeAccepted: true, sidePanel: copy(panelState) });
+        if (msg.type === 'GET_CONTEXT') return ok({ preferences: copy(settings.preferences), services: copy(settings.services), providerPriority: [...settings.providerPriority], selectionEnabled: settings.selectionEnabled, pageDisplayMode: settings.pageDisplayMode, hoverTranslationEnabled: settings.hoverTranslationEnabled, hoverShortcut: settings.hoverShortcut, floatingEnabled: true, floatingPosition, dataNoticeAccepted: true, sidePanel: copy(panelState) });
         if (msg.type === 'SET_FLOATING_POSITION') {
           if (!Number.isFinite(msg.position) || msg.position < 0 || msg.position > 1) return { ok: false, error: { code: 'INVALID_INPUT', message: '位置无效。', retryable: false } };
           floatingPosition = msg.position;
@@ -79,6 +80,9 @@
           if (msg.dataNoticeAccepted !== undefined) settings.dataNoticeAccepted = msg.dataNoticeAccepted;
           if (msg.providerPriority) settings.providerPriority = [...msg.providerPriority];
           if (msg.selectionEnabled !== undefined) settings.selectionEnabled = msg.selectionEnabled;
+          if (msg.pageDisplayMode !== undefined) settings.pageDisplayMode = msg.pageDisplayMode;
+          if (msg.hoverTranslationEnabled !== undefined) settings.hoverTranslationEnabled = msg.hoverTranslationEnabled;
+          if (msg.hoverShortcut !== undefined) settings.hoverShortcut = msg.hoverShortcut;
           if (msg.provider && msg.config) {
             const { endpoint, model } = msg.config;
             settings.services[msg.provider] = { endpoint, ...(model ? { model } : {}), configured: true };
@@ -115,11 +119,12 @@
       },
     },
     tabs: {
+      create: async ({ url }) => { location.href = url; return { id: 2 }; },
       query: async () => [{ id: 1, windowId: 1, url: 'https://example.org/article', active: true }],
       sendMessage: async (_id, msg) => {
         if (msg.type === 'SET_PREFERENCES') page.preferences = copy(msg.preferences);
         if (msg.type === 'SET_SELECTION') page.selection = copy(msg.selection);
-        if (msg.type === 'PAGE_START') page = { state: 'waiting', completed: 8, failed: 0, pending: 0, canRestore: true, message: '当前已展开内容已翻译，展开菜单后继续补译。', preferences: copy(msg.preferences), selection: msg.selection && copy(msg.selection) };
+        if (msg.type === 'PAGE_START') page = { state: 'waiting', completed: 8, failed: 0, pending: 0, canRestore: true, message: '当前可见内容已翻译，继续滚动后自动补译。', preferences: copy(msg.preferences), selection: msg.selection && copy(msg.selection) };
         if (msg.type === 'PAGE_STOP') page.state = 'stopped';
         if (msg.type === 'RESTORE') page = { state: 'idle', completed: 0, failed: 0, pending: 0, canRestore: false, preferences: page.preferences, selection: page.selection };
         return ok(copy(page));

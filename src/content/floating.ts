@@ -21,7 +21,7 @@ interface DragState {
   selectionStyle?: { value: string; priority: string };
 }
 
-/** 两个图标分别切换全文翻译与原生侧栏，整组可沿页面右侧上下拖动。 */
+/** 两个图标分别切换按滚动翻译与原生侧栏，整组可沿页面右侧上下拖动。 */
 export class FloatingTranslator {
   private host?: HTMLSpanElement;
   private primary?: HTMLButtonElement;
@@ -103,7 +103,7 @@ export class FloatingTranslator {
     const sideLabel = !panel?.ready ? '侧栏状态正在就绪' : !panel.canToggle ? '打开侧栏（用原生×关闭）' : panel.open ? '关闭页伴翻译侧栏' : '打开页伴翻译侧栏';
     this.sidePanel.setAttribute('aria-label', sideLabel);
     this.sidePanel.title = panel?.ready && !panel.open && !panel.canOpen ? '当前浏览器不支持打开侧栏，请升级浏览器。' : sideLabel;
-    const message = status.actionError?.message ?? (this.restoring ? '正在恢复原文…' : status.message ?? (canRestore ? '再次点击主按钮恢复原文。' : '点击主按钮翻译当前已展开的全文。'));
+    const message = status.actionError?.message ?? (this.restoring ? '正在恢复原文…' : status.message ?? (canRestore ? '再次点击主按钮恢复原文。' : '点击主按钮开始按滚动翻译。'));
     if (this.statusText.textContent !== message) this.statusText.textContent = message;
   }
 

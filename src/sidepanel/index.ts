@@ -1,6 +1,6 @@
 import '../ui/base.css';
 import { send, SELECTION_LIMIT, type Preferences, type PublicSettings, type TranslationSelection } from '../shared/types';
-import { languageName } from '../shared/languages';
+import { defaultTargetForText, languageName } from '../shared/languages';
 import { defaultSelection, resolvePreferences } from '../shared/services';
 import { element, feedback } from '../ui/common';
 import { populateLanguageSelect } from '../ui/languages';
@@ -30,6 +30,8 @@ let failedSnapshot: TranslationSnapshot | undefined;
 let resultSnapshot: TranslationSnapshot | undefined;
 let translated = '';
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let targetOverridden = false;
+let sourceOverridden = false;
 
 /** 侧栏选择只属于此侧栏，不通过保存设置改写全局偏好。 */
 function selection(): TranslationSelection {
@@ -151,6 +153,8 @@ retryButton.addEventListener('click', () => { if (failedSnapshot) void translate
 clearButton.addEventListener('click', () => {
   stop(false);
   textInput.value = '';
+  targetOverridden = false;
+  sourceOverridden = false;
   translated = '';
   failedSnapshot = resultSnapshot = undefined;
   feedback(message, '');
@@ -158,20 +162,32 @@ clearButton.addEventListener('click', () => {
   textInput.focus();
 });
 textInput.addEventListener('input', () => {
+  if (!textInput.value.trim()) { targetOverridden = false; sourceOverridden = false; }
+  else if (!targetOverridden) {
+    target.value = defaultTargetForText(textInput.value);
+    if (!sourceOverridden) source.value = 'auto';
+  }
   translated = '';
   failedSnapshot = resultSnapshot = undefined;
   feedback(message, '');
   render();
 });
-for (const field of [source, target]) field.addEventListener('change', () => {
+source.addEventListener('change', () => {
   // 改选仅影响下一次翻译；失败快照仍保留以便按原条件重试。
+  sourceOverridden = true;
   render();
 });
+target.addEventListener('change', () => { targetOverridden = true; render(); });
 copyButton.addEventListener('click', () => {
   if (!translated) return;
   void navigator.clipboard.writeText(translated).then(() => feedback(message, '译文已复制。', 'success')).catch(() => feedback(message, '复制失败，请选中译文后手动复制。', 'error'));
 });
-for (const id of ['panel-settings', 'panel-setup-button']) element(id).addEventListener('click', () => void chrome.runtime.openOptionsPage().catch(() => feedback(message, '设置页暂时无法打开，请从扩展管理页打开。', 'error')));
+element('panel-settings').addEventListener('click', () => void chrome.runtime.openOptionsPage().catch(() => feedback(message, '设置页暂时无法打开，请从扩展管理页打开。', 'error')));
+element('panel-setup-button').addEventListener('click', () => {
+  // 普通 openOptionsPage 不能指定锚点；直接打开扩展页，确保用户看到需要确认的说明。
+  const url = `${chrome.runtime.getURL('options.html')}#privacy`;
+  void chrome.tabs.create({ url }).catch(() => chrome.runtime.openOptionsPage()).catch(() => feedback(message, '设置页暂时无法打开，请从扩展管理页打开。', 'error'));
+});
 const refreshOnFocus = (): void => { void refreshSettings(); };
 const refreshOnVisible = (): void => {
   if (document.hidden) {

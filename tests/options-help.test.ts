@@ -10,6 +10,7 @@ let windowEvents: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.resetModules();
+  history.replaceState(null, '', '/');
   windowEvents = vi.spyOn(window, 'addEventListener');
   settings = {
     preferences: { provider: 'bailian', source: 'auto', target: 'zh' },
@@ -18,12 +19,16 @@ beforeEach(() => {
   };
   request = vi.fn(async (message: BackgroundMessage) => {
     if (message.type === 'SAVE_SETTINGS' && message.dataNoticeAccepted) settings.dataNoticeAccepted = true;
+    if (message.type === 'SAVE_SETTINGS' && typeof message.hoverTranslationEnabled === 'boolean') settings.hoverTranslationEnabled = message.hoverTranslationEnabled;
+    if (message.type === 'SAVE_SETTINGS' && message.hoverShortcut) settings.hoverShortcut = message.hoverShortcut;
+    if (message.type === 'SAVE_SETTINGS' && message.pageDisplayMode) settings.pageDisplayMode = message.pageDisplayMode;
     return { ok: true, value: structuredClone(settings) };
   });
   vi.stubGlobal('chrome', { runtime: { sendMessage: request }, permissions: { request: vi.fn(async () => false) } });
 });
 
 afterEach(() => {
+  history.replaceState(null, '', '/');
   for (const [type, listener, options] of windowEvents.mock.calls) window.removeEventListener(type as string, listener as EventListener, options as EventListenerOptions);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -52,6 +57,26 @@ function node<T extends HTMLElement = HTMLElement>(id: string): T { return docum
 function helpButton(provider: string): HTMLButtonElement { return document.querySelector(`[data-service-help="${provider}"]`) as HTMLButtonElement; }
 
 describe('设置页配置帮助', () => {
+  it('展示四种页面模式，悬停翻译默认关闭并支持直接录入自定义组合键', async () => {
+    await load();
+    const mode = node<HTMLSelectElement>('page-display-mode');
+    expect([...mode.options].map(option => option.value)).toEqual(['bilingual', 'translation', 'hover', 'parallel']);
+    expect(node<HTMLInputElement>('hover-toggle').checked).toBe(false);
+    expect(node<HTMLInputElement>('hover-shortcut').value).toBe('Alt+I');
+    node<HTMLInputElement>('hover-toggle').checked = true;
+    node('hover-toggle').dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(settings.hoverTranslationEnabled).toBe(true));
+    await vi.waitFor(() => expect(node<HTMLButtonElement>('save-preferences').disabled).toBe(false));
+    const shortcut = node<HTMLInputElement>('hover-shortcut');
+    shortcut.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(settings.hoverShortcut).toBe('Ctrl+Shift+K'));
+    await vi.waitFor(() => expect(node<HTMLButtonElement>('save-preferences').disabled).toBe(false));
+    mode.value = 'hover';
+    node('preferences-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(settings.pageDisplayMode).toBe('hover'));
+    expect(request.mock.calls.some(([message]) => message.type === 'SAVE_SETTINGS' && message.hoverTranslationEnabled === true)).toBe(true);
+  });
+
   it('按服务展示步骤和固定官方链接，打开与关闭不发送保存或测试请求，也不覆盖表单', async () => {
     await load();
     node<HTMLInputElement>('bailian-model').value = '尚未保存的模型';
@@ -145,6 +170,17 @@ describe('设置页配置帮助', () => {
 });
 
 describe('数据说明折叠和首次确认', () => {
+  it('从侧栏定向进入时展开、高亮并聚焦数据使用说明', async () => {
+    history.replaceState(null, '', '/options.html#privacy');
+    await load();
+    await vi.waitFor(() => expect(node<HTMLDetailsElement>('privacy-details').open).toBe(true));
+    expect(location.hash).toBe('#privacy');
+    expect(document.activeElement).toBe(node('privacy-details').querySelector('summary'));
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/surfaces.css'), 'utf8');
+    expect(css).toContain('#privacy:target .privacy-details');
+    expect(css).toContain('.sidebar-nav a[href="#privacy"]');
+  });
+
   it('未确认时展开并保留显式确认入口，只有点击确认才保存，成功后收起', async () => {
     settings.dataNoticeAccepted = false;
     await load();

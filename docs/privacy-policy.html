@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="页伴翻译扩展隐私政策">
+  <title>隐私政策 · 页伴翻译</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f6f3ec;
+      --card: #fffdf8;
+      --ink: #1d2923;
+      --muted: #617068;
+      --accent: #276247;
+      --line: #d9dfd9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.75 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+
+    main {
+      width: min(860px, calc(100% - 32px));
+      margin: 48px auto;
+      padding: clamp(28px, 6vw, 64px);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 18px 50px rgb(24 51 39 / 8%);
+    }
+
+    h1, h2 { line-height: 1.3; }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 44px); letter-spacing: -.04em; }
+    h2 { margin: 38px 0 10px; font-size: 21px; }
+    p, ul { margin: 10px 0; }
+    ul { padding-left: 1.4em; }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    code { padding: .12em .35em; background: #edf1ed; border-radius: 4px; }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .meta, .note { color: var(--muted); }
+
+    .summary {
+      margin: 28px 0;
+      padding: 18px 20px;
+      background: #edf5ef;
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 20px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    @media (max-width: 560px) {
+      main { width: 100%; margin: 0; border: 0; border-radius: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">YeBan Translate</p>
+    <h1>页伴翻译隐私政策</h1>
+    <p class="meta">生效日期：2026 年 9 月 7 日　·　最近更新：2026 年 9 月 7 日</p>
+
+    <div class="summary">
+      <strong>简要说明：</strong>页伴翻译不运营翻译中转服务器，不出售用户数据，也不记录浏览历史或翻译历史。服务凭据和偏好保存在用户本机；只有在用户主动发起翻译时，待译文本和必要的鉴权信息才会通过 HTTPS 直接发送至用户选择的阿里云官方翻译服务。
+    </div>
+
+    <h2>一、适用范围</h2>
+    <p>本政策适用于 Chrome、Edge 等 Chromium 浏览器中的“页伴翻译”（以下简称“本扩展”）。本扩展用于提供网页双语翻译、划词翻译、悬浮入口和文本翻译侧栏。用户需要配置自己有权使用的百炼大模型或阿里云机器翻译服务。</p>
+
+    <h2>二、本扩展处理的信息</h2>
+    <p>为了提供用户主动请求的翻译功能，本扩展可能处理以下信息：</p>
+    <ul>
+      <li><strong>待译文本：</strong>用户发起整页翻译时符合处理条件的网页文字、用户确认翻译的选中文字、用户在侧栏中输入或粘贴的文字，以及测试连接时发送的固定示例文本。</li>
+      <li><strong>翻译服务鉴权信息：</strong>用户填写的百炼 API Key，或阿里云机器翻译 AccessKey ID 与 AccessKey Secret。百炼 API Key 会作为鉴权信息发送至百炼官方接口；阿里云 AccessKey Secret 仅在本机用于计算请求签名，不以明文发送，AccessKey ID 和签名会随请求发送。</li>
+      <li><strong>本地设置：</strong>语言偏好、服务优先级、服务端点、模型名称、用户是否确认数据使用说明、划词功能开关、用户明确启用或停用的网站来源，以及悬浮入口位置。</li>
+      <li><strong>临时运行状态：</strong>当前翻译任务、重试和冷却状态、侧栏开关状态等完成扩展功能所需的临时信息。</li>
+    </ul>
+    <p>本扩展不会自动读取网页输入框或可编辑区域中的内容，不会把独立代码块、隐藏文字或整页 HTML 作为翻译历史保存。</p>
+
+    <h2>三、信息的使用方式</h2>
+    <p>上述信息仅用于提供和维护本扩展明确展示的翻译功能，包括：</p>
+    <ul>
+      <li>向用户选择的服务提交翻译请求并展示译文；</li>
+      <li>保存用户配置和已授权网站规则；</li>
+      <li>控制任务停止、失败重试、侧栏状态和悬浮入口位置；</li>
+      <li>保障请求只发送到本扩展允许的官方服务端点。</li>
+    </ul>
+    <p>本扩展不会将这些信息用于广告、用户画像、信用评估、数据经纪或与翻译功能无关的用途。</p>
+
+    <h2>四、本地存储与保留期限</h2>
+    <ul>
+      <li>服务凭据、偏好和网站规则保存在浏览器的本机扩展存储中，不使用 Chrome 同步存储。</li>
+      <li>本扩展将本机存储限制为扩展可信上下文访问，不向访问的网页回传真实凭据。但浏览器扩展存储不是操作系统密码库，用户仍应保护自己的浏览器账户和设备。</li>
+      <li>本扩展不持久保存待译文本或译文历史。网页上的译文会在恢复原文、刷新或关闭页面后移除；临时任务状态会随任务或浏览器会话结束而失效。</li>
+      <li>用户可以在设置页删除单个服务的凭据，也可以通过卸载扩展删除本扩展的本地数据。</li>
+    </ul>
+
+    <h2>五、信息发送与第三方服务</h2>
+    <p>本扩展没有开发者运营的翻译中转服务器。用户发起翻译后，待译文本和完成鉴权所需的信息会通过 HTTPS 直接发送至用户选择的下列服务之一：</p>
+    <ul>
+      <li>阿里云百炼 / Model Studio 的官方 DashScope 或工作空间接口；</li>
+      <li>阿里云机器翻译通用版官方接口。</li>
+    </ul>
+    <p>这些服务由阿里云运营。服务商可能依据用户与其签订的协议、账户设置及其隐私政策处理和保留请求内容。请在使用前阅读<a href="https://help.aliyun.com/zh/document_detail/2705226.html">阿里云隐私政策</a>以及所选产品的服务协议。</p>
+    <p>用户应确保自己有权向所选服务提交相关文本。对于包含个人信息、商业秘密或其他敏感内容的页面或文字，请在确认具有相应权限后再发起翻译。</p>
+
+    <h2>六、不会进行的行为</h2>
+    <ul>
+      <li>不向本扩展开发者上传或同步服务凭据、浏览记录、待译文本或译文；</li>
+      <li>不记录用户访问过的网页，不建立浏览历史；</li>
+      <li>不接入广告、行为分析或用户追踪服务；</li>
+      <li>不出售用户数据，不为广告目的共享或转移用户数据；</li>
+      <li>扩展开发者不接收翻译内容，也不提供可供开发者人员读取翻译内容的后台。</li>
+    </ul>
+
+    <h2>七、浏览器权限</h2>
+    <ul>
+      <li><code>activeTab</code>：用户点击扩展时，临时访问当前标签页。</li>
+      <li><code>scripting</code>：在用户当前页面注入随扩展一起发布的本地脚本，以实现网页翻译。</li>
+      <li><code>storage</code>：在本机保存服务配置、偏好和网站规则。</li>
+      <li><code>sidePanel</code>：显示浏览器原生文本翻译侧栏。</li>
+      <li>阿里云相关主机权限：直接请求本扩展支持的官方翻译接口。</li>
+      <li>可选的网站访问权限：只有在用户主动为当前网站或所有普通 HTTP / HTTPS 网站授权后，才用于划词翻译、悬浮入口和持续网页工具。</li>
+    </ul>
+    <p>用户可以通过扩展设置页或浏览器扩展管理页面关闭网站功能、撤销网站访问权限。</p>
+
+    <h2>八、数据安全</h2>
+    <p>本扩展只允许 HTTPS 官方服务端点，翻译请求使用加密连接传输；扩展页面不执行远程代码。停止任务可以阻止尚未提交的请求，但无法撤回已经发送给服务商的请求，该请求仍可能产生服务用量。</p>
+
+    <h2>九、Chrome Web Store Limited Use</h2>
+    <p>本扩展对通过浏览器权限获得的信息的使用遵守 <a href="https://developer.chrome.com/docs/webstore/program-policies/user-data-faq">Chrome Web Store 用户数据政策</a>，包括 Limited Use（有限使用）要求。信息仅用于提供或改进本扩展公开说明的单一用途。</p>
+
+    <h2>十、政策更新</h2>
+    <p>如果本扩展的数据处理方式发生实质变化，本政策会同步更新生效日期和说明。需要新增权限或改变数据用途时，将通过扩展界面、商店页面或浏览器权限提示向用户说明，并在适用时重新取得用户同意。</p>
+
+    <h2>十一、联系我们</h2>
+    <p>如对本政策或本扩展的数据处理方式有疑问，可以通过 <a href="https://github.com/czhqwer/yeban-translate/issues">GitHub Issues</a> 联系页伴翻译开发者。提交问题时请勿附带 API Key、AccessKey Secret、待译敏感文本或其他真实凭据。</p>
+
+    <footer>
+      <p><a href="https://github.com/czhqwer/yeban-translate">页伴翻译项目主页</a></p>
+      <p>页伴翻译 · YeBan Translate</p>
+    </footer>
+  </main>
+</body>
+</html>

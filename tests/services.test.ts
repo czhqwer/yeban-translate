@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSelection, normalizePriority, resolvePreferences, resolveProvider } from '../src/shared/services';
+import { defaultTargetForText } from '../src/shared/languages';
 import type { PublicSettings } from '../src/shared/types';
+import { normalizeShortcut } from '../src/shared/shortcuts';
 
 /** 测试仅构造公开配置状态，不含凭据，不发送请求。 */
 function state(bailian = false, aliyun = false): PublicSettings {
@@ -12,6 +14,17 @@ function state(bailian = false, aliyun = false): PublicSettings {
 }
 
 describe('统一服务优先级解析', () => {
+  it('悬停快捷键规范化修饰键顺序，并拒绝没有安全修饰键的组合', () => {
+    expect(normalizeShortcut('Shift+Ctrl+k')).toBe('Ctrl+Shift+K');
+    expect(normalizeShortcut('Alt+I')).toBe('Alt+I');
+    expect(normalizeShortcut('Shift+I')).toBeUndefined();
+    expect(normalizeShortcut('Alt+Control')).toBeUndefined();
+  });
+  it('中文默认译成英语，英文及带汉字的日语默认译成中文', () => {
+    expect(defaultTargetForText('这是中文，包含 API 名称。')).toBe('en');
+    expect(defaultTargetForText('English documentation')).toBe('zh');
+    expect(defaultTargetForText('日本語の文書です')).toBe('zh');
+  });
   it('两个服务均未配置时不选择服务', () => expect(resolvePreferences(undefined, state())).toBeUndefined());
   it('只配置阿里时自动跳过百炼', () => expect(resolvePreferences(undefined, state(false, true))?.provider).toBe('aliyun'));
   it('只配置百炼时使用百炼', () => expect(resolvePreferences(undefined, state(true, false))?.provider).toBe('bailian'));

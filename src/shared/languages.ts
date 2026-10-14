@@ -38,3 +38,10 @@ export function languageName(code: LanguageCode): string {
 export function htmlLanguage(code: LanguageCode): string {
   return LANGUAGE_OPTIONS.find(language => language.code === code)?.htmlLang ?? code;
 }
+
+/** 中文默认译成英语；其余文字默认译成简体中文，日/韩文字中的汉字不误判为中文。 */
+export function defaultTargetForText(text: string): 'en' | 'zh' {
+  const hasHan = /\p{Script=Han}/u.test(text);
+  const hasJapaneseOrKorean = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text);
+  return hasHan && !hasJapaneseOrKorean ? 'en' : 'zh';
+}

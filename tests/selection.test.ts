@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OWNED, readSelection } from '../src/content/dom';
+import { extractParagraphs, isInViewport, OWNED, readSelection, selectionUnchanged } from '../src/content/dom';
 import { SelectionTranslator } from '../src/content/selection';
 import { FloatingTranslator } from '../src/content/floating';
 import type { Preferences } from '../src/shared/types';
@@ -23,7 +23,7 @@ beforeEach(() => {
   vi.stubGlobal('chrome', { runtime: { sendMessage: request } });
   translator = new SelectionTranslator(document);
 });
-afterEach(async () => { dock?.destroy(); dock = undefined; await translator.setEnabled(false); await translator.close(); document.getSelection()?.removeAllRanges(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { vi.useRealTimers(); dock?.destroy(); dock = undefined; await translator.setEnabled(false); await translator.close(); document.getSelection()?.removeAllRanges(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function select(element: Element): void {
   const range = document.createRange();
@@ -150,7 +150,7 @@ describe('划词按钮与结果窗定位', () => {
     expect(position()).toEqual({ left: 206, top: 58 });
   });
 
-  it('滚动和缩放重新定位，选区离开视口后收起', async () => {
+  it('滚动和缩放重新定位，小入口短暂离屏不会误关，持续离屏后才收起', async () => {
     selectionGeometry(lineRect(20, 60, 180, 20), [lineRect(20, 60, 180, 20)]);
     await translator.setEnabled(true);
     select(document.querySelector('#first')!);
@@ -161,9 +161,75 @@ describe('划词按钮与结果窗定位', () => {
     vi.stubGlobal('innerWidth', 400);
     window.dispatchEvent(new Event('resize'));
     expect(position()).toEqual({ left: 364, top: 126 });
+    vi.useFakeTimers();
     selectionGeometry(lineRect(20, -40, 180, 20), [lineRect(20, -40, 180, 20)]);
     document.dispatchEvent(new Event('scroll'));
+    expect(panel()?.querySelector('.panel')?.getAttribute('data-detached')).toBe('true');
+    vi.advanceTimersByTime(1499);
+    expect(panel()).toBeDefined();
+    selectionGeometry(lineRect(20, 60, 180, 20), [lineRect(20, 60, 180, 20)]);
+    document.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(1);
+    expect(panel()).toBeDefined();
+    expect(panel()?.querySelector('.panel')?.hasAttribute('data-detached')).toBe(false);
+    selectionGeometry(lineRect(20, -40, 180, 20), [lineRect(20, -40, 180, 20)]);
+    document.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(1500);
     expect(panel()).toBeUndefined();
+  });
+
+  it('完整结果窗离开原选区后固定在视口内，滚回选区时继续跟随', async () => {
+    selectionGeometry(lineRect(300, 100, 190, 20), [lineRect(300, 100, 190, 20)]);
+    await translator.setEnabled(true);
+    select(document.querySelector('#first')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    const resultPanel = panel()!.querySelector<HTMLElement>('.panel')!;
+    const before = position();
+    selectionGeometry(lineRect(20, -80, 180, 20), [lineRect(20, -80, 180, 20)]);
+    document.dispatchEvent(new Event('scroll'));
+    expect(panel()).toBeDefined();
+    expect(resultPanel.dataset.detached).toBe('true');
+    expect(resultPanel.getAttribute('aria-description')).toContain('仍固定');
+    expect(position()).toEqual(before);
+    selectionGeometry(lineRect(40, 80, 180, 20), [lineRect(40, 80, 180, 20)]);
+    document.dispatchEvent(new Event('scroll'));
+    expect(resultPanel.hasAttribute('data-detached')).toBe(false);
+    expect(resultPanel.hasAttribute('aria-description')).toBe(false);
+    expect(position().left).toBe(40);
+  });
+
+  it('完整结果窗支持右下角双向缩放，并在本页后续结果窗沿用用户尺寸', async () => {
+    selectionGeometry(lineRect(20, 60, 180, 20), [lineRect(20, 60, 180, 20)]);
+    await translator.setEnabled(true);
+    select(document.querySelector('#first')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    const firstPanel = panel()!.querySelector<HTMLElement>('.panel')!;
+    const style = panel()!.querySelector('style')?.textContent;
+    expect(style).toContain('resize: both');
+    expect(style).toContain('::-webkit-scrollbar-thumb');
+    expect(style).toContain('::-webkit-resizer');
+    expect(style).toContain('--paper: #f7f5ef');
+    expect(style).toContain('.original, .result');
+    const content = firstPanel.querySelector<HTMLElement>('.panel-content');
+    expect(content).toBeTruthy();
+    expect(firstPanel.firstElementChild).toBe(content);
+    expect(style).toContain('.panel-content {');
+    expect(style).toContain('padding: 15px 17px 21px 15px');
+    expect(style).toContain('overflow: hidden; resize: both');
+    expect(firstPanel.querySelector('.close')?.textContent).toBe('关闭');
+    expect(firstPanel.title).toBe('拖动右下角可调整窗口大小');
+    vi.spyOn(firstPanel, 'getBoundingClientRect').mockReturnValue(lineRect(0, 0, 420, 230));
+    firstPanel.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 418, clientY: 228 }));
+    document.dispatchEvent(new MouseEvent('pointerup', { button: 0 }));
+    await translator.close();
+    select(document.querySelector('#second')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    const nextPanel = panel()!.querySelector<HTMLElement>('.panel')!;
+    expect(nextPanel.style.width).toBe('420px');
+    expect(nextPanel.style.height).toBe('230px');
   });
 
   it.each([{ name: '空列表', lines: [] }, { name: '零尺寸', lines: [lineRect(0, 0, 0, 0)] }])('client rects为空或零尺寸时以选区边界可靠回退（$name）', async ({ lines }) => {
@@ -216,13 +282,41 @@ describe('受保护选区', () => {
     expect(readSelection(document.getSelection(), document)?.text).toBe('Normal protected normal');
   });
 
-  it('代码块仍然拒绝划词翻译', () => {
-    document.body.innerHTML = '<pre>const protectedValue = true;</pre>';
+  it('允许主动选中代码块中的文字，全文提取仍排除代码块', async () => {
+    document.body.innerHTML = '<pre><code>const exampleValue = true; // A short explanation</code></pre>';
     const range = document.createRange();
     range.selectNodeContents(document.querySelector('pre')!);
     document.getSelection()?.removeAllRanges();
     document.getSelection()?.addRange(range);
-    expect(readSelection(document.getSelection(), document)).toBeNull();
+    expect(readSelection(document.getSelection(), document)?.text).toBe('const exampleValue = true; // A short explanation');
+    expect(extractParagraphs(document)).toEqual([]);
+    await translator.setEnabled(true);
+    document.querySelector('pre')!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await vi.waitFor(() => expect(panel()?.querySelector('.trigger')).toBeTruthy());
+    expect(request).not.toHaveBeenCalled();
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+  });
+
+  it('富文本编辑器允许读取明确选区，但整页正文提取仍不会采集草稿', () => {
+    document.body.innerHTML = '<div id="editor" role="textbox" contenteditable="true"><p>语雀富文本中的选中文字</p><p>未选中的草稿</p></div>';
+    const paragraph = document.querySelector('p')!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    expect(readSelection(document.getSelection(), document)?.text).toBe('语雀富文本中的选中文字');
+    expect(extractParagraphs(document)).toEqual([]);
+  });
+
+  it('普通输入框只读取明确选中的片段，密码框始终拒绝', () => {
+    document.body.innerHTML = '<textarea id="editor">前缀 需要翻译的文字 后缀</textarea><input id="password" type="password" value="不能读取">';
+    const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
+    editor.setSelectionRange(3, 10);
+    expect(readSelection(null, document, editor)?.text).toBe('需要翻译的文字');
+    const password = document.querySelector<HTMLInputElement>('#password')!;
+    password.setSelectionRange(0, password.value.length);
+    expect(readSelection(null, document, password)).toBeNull();
   });
 
   it('没有网站授权时不监听、不展示按钮、不发送文本', async () => {
@@ -234,6 +328,83 @@ describe('受保护选区', () => {
 });
 
 describe('点击划词翻译', () => {
+  it('富文本中文选区显示入口并自动翻译为英语', async () => {
+    document.body.innerHTML = '<div id="editor" role="textbox" contenteditable="true"><p>语雀文档中的中文段落</p></div>';
+    translator = new SelectionTranslator(document, () => ({ provider: 'auto', source: 'en', target: 'fr' }));
+    await translator.setEnabled(true);
+    select(document.querySelector('#editor p')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(request.mock.calls.some(([message]) => message.type === 'BEGIN_JOB')).toBe(true));
+    expect(request.mock.calls.find(([message]) => message.type === 'BEGIN_JOB')?.[0].preferences).toMatchObject({ source: 'auto', target: 'en' });
+    expect(request.mock.calls.find(([message]) => message.type === 'TRANSLATE')?.[0].text).toBe('语雀文档中的中文段落');
+  });
+
+  it('textarea 只发送选中片段并默认翻译为中文', async () => {
+    document.body.innerHTML = '<textarea id="editor">Prefix selected editor text suffix</textarea>';
+    const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(rect);
+    editor.focus();
+    editor.setSelectionRange(7, 27);
+    const snapshot = readSelection(null, document, editor)!;
+    expect(snapshot.text).toBe('selected editor text');
+    expect(isInViewport(editor)).toBe(true);
+    expect(selectionUnchanged(snapshot, document)).toBe(true);
+    await translator.setEnabled(true);
+    editor.dispatchEvent(new Event('select', { bubbles: true }));
+    await clickTrigger();
+    await vi.waitFor(() => expect(request.mock.calls.some(([message]) => message.type === 'TRANSLATE')).toBe(true));
+    expect(request.mock.calls.find(([message]) => message.type === 'BEGIN_JOB')?.[0].preferences).toMatchObject({ source: 'auto', target: 'zh' });
+    expect(request.mock.calls.find(([message]) => message.type === 'TRANSLATE')?.[0].text).toBe('selected editor text');
+  });
+
+  it('富文本译文只有点击结果窗按钮后才替换原选区，并发出可观察输入事件', async () => {
+    document.body.innerHTML = '<div id="editor" role="textbox" contenteditable="true"><p>需要替换的中文</p></div>';
+    const editor = document.querySelector<HTMLElement>('#editor')!;
+    const inputEvents: string[] = [];
+    editor.addEventListener('beforeinput', event => inputEvents.push(event.type));
+    editor.addEventListener('input', event => inputEvents.push(event.type));
+    await translator.setEnabled(true);
+    select(editor.querySelector('p')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    expect(editor.textContent).toBe('需要替换的中文');
+    expect(panel()?.querySelector<HTMLButtonElement>('.result-actions button:nth-child(2)')?.textContent).toBe('替换选中');
+    [...panel()!.querySelectorAll('button')].find(button => button.textContent === '替换选中')!.click();
+    expect(editor.textContent).toBe('测试译文');
+    expect(inputEvents).toEqual(['beforeinput', 'input']);
+  });
+
+  it('textarea 插入译文保留原选区，并只在主动点击后写到选区末尾', async () => {
+    document.body.innerHTML = '<textarea id="editor">Prefix selected text suffix</textarea>';
+    const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(rect);
+    editor.focus();
+    editor.setSelectionRange(7, 20);
+    await translator.setEnabled(true);
+    editor.dispatchEvent(new Event('select', { bubbles: true }));
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    expect(editor.value).toBe('Prefix selected text suffix');
+    [...panel()!.querySelectorAll('button')].find(button => button.textContent === '插入译文')!.click();
+    expect(editor.value).toBe('Prefix selected text\n测试译文 suffix');
+  });
+
+  it('紧凑目标语言选择在结果窗内切换并重新翻译，不影响普通正文', async () => {
+    await translator.setEnabled(true);
+    select(document.querySelector('#first')!);
+    await clickTrigger();
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('测试译文'));
+    expect(panel()?.querySelector('[aria-label="划词翻译目标语言"]')).toBeTruthy();
+    expect([...panel()!.querySelectorAll('button')].some(button => button.textContent === '替换选中')).toBe(false);
+    const target = panel()!.querySelector<HTMLSelectElement>('[aria-label="划词翻译目标语言"]')!;
+    expect(target.value).toBe('zh');
+    target.value = 'fr';
+    target.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(request.mock.calls.filter(([message]) => message.type === 'BEGIN_JOB')).toHaveLength(2));
+    expect(request.mock.calls.filter(([message]) => message.type === 'BEGIN_JOB').at(-1)?.[0].preferences.target).toBe('fr');
+    expect(request.mock.calls.some(([message]) => message.type === 'CANCEL_JOB' && message.mode === 'selection')).toBe(true);
+  });
+
   it('划词按钮使用16px SVG且宿主无整体焦点框，鼠标不转移焦点但键盘仍可聚焦按钮', async () => {
     await translator.setEnabled(true);
     select(document.querySelector('#first')!);
@@ -249,7 +420,7 @@ describe('点击划词翻译', () => {
     expect(event.defaultPrevented).toBe(true);
     trigger.focus();
     expect(panel()!.activeElement).toBe(trigger);
-    expect(panel()?.querySelector('style')?.textContent).toContain('width:24px;height:24px');
+    expect(panel()?.querySelector('style')?.textContent).toContain('width: 24px; height: 24px');
   });
 
   it('操作实际浮球留下 closed shadow 焦点后，外部合法选区仍显示划词按钮', async () => {
@@ -326,7 +497,7 @@ describe('点击划词翻译', () => {
     expect(request.mock.calls.filter(([message]) => message.type === 'BEGIN_JOB').map(([message]) => message.preferences.provider)).toEqual(['bailian', 'bailian', 'aliyun']);
   });
 
-  it('本页所选阿里翻译及英语优先于全局默认百炼，点击时固定服务快照', async () => {
+  it('本页所选服务优先于全局默认，非中文选区自动翻译为中文并固定快照', async () => {
     let selectedPreferences: Preferences = { provider: 'aliyun', source: 'auto', target: 'en' };
     translator = new SelectionTranslator(document, () => selectedPreferences);
     request.mockImplementation(async (message: { type: string }) => message.type === 'GET_CONTEXT' ? { ok: true, value: { ...context, services: { bailian: { configured: false }, aliyun: { configured: true } } } } : message.type === 'BEGIN_JOB' ? { ok: true, value: { revision: 1 } } : { ok: true, value: { translated: 'Translated selection' } });
@@ -335,8 +506,9 @@ describe('点击划词翻译', () => {
     await clickTrigger();
     selectedPreferences = { provider: 'bailian', source: 'auto', target: 'zh' };
     await vi.waitFor(() => expect(request.mock.calls.some(([message]) => message.type === 'BEGIN_JOB')).toBe(true));
-    expect(request.mock.calls.find(([message]) => message.type === 'BEGIN_JOB')?.[0]).toMatchObject({ mode: 'selection', preferences: { provider: 'aliyun', source: 'auto', target: 'en' } });
-    await vi.waitFor(() => expect(panel()?.textContent).toContain('阿里云机器翻译 · 英语'));
+    expect(request.mock.calls.find(([message]) => message.type === 'BEGIN_JOB')?.[0]).toMatchObject({ mode: 'selection', preferences: { provider: 'aliyun', source: 'auto', target: 'zh' } });
+    await vi.waitFor(() => expect(panel()?.textContent).toContain('阿里云机器翻译'));
+    expect(panel()?.querySelector<HTMLSelectElement>('[aria-label="划词翻译目标语言"]')?.value).toBe('zh');
   });
 
   it('选中只显示按钮，点击后才发送快照，返回 HTML 只显示文本', async () => {

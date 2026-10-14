@@ -11,7 +11,7 @@ interface Entry<T = unknown> {
   finished: boolean;
 }
 
-/** 每家服务共享两个请求槽位；划词优先取得下一个空闲槽。 */
+/** 每家服务共享两个请求槽位；划词与悬停等即时交互优先取得下一个空闲槽。 */
 export class RequestPool {
   private readonly waiting: Entry[] = [];
   private readonly active = new Set<Entry>();
@@ -43,7 +43,7 @@ export class RequestPool {
 
   private drain(): void {
     while (this.active.size < this.capacity && this.waiting.length) {
-      const selected = this.waiting.findIndex(entry => entry.mode === 'selection');
+      const selected = this.waiting.findIndex(entry => entry.mode !== 'page');
       const entry = this.waiting.splice(selected < 0 ? 0 : selected, 1)[0];
       this.active.add(entry);
       Promise.resolve().then(() => entry.run(entry.controller.signal)).then(value => {
