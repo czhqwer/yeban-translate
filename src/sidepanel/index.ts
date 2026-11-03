@@ -6,8 +6,10 @@ import { element, feedback } from '../ui/common';
 import { populateLanguageSelect } from '../ui/languages';
 import { RequestVersion, unicodeLength } from '../ui/state';
 import { PanelChannel } from './channel';
+import { ImageAttachment } from './images';
+import type { ReadingDraft } from '../shared/image';
 
-interface TranslationSnapshot { preferences: Preferences; text: string; }
+interface TranslationSnapshot { preferences: Preferences; text: string; image?: string; imageTarget?: Preferences['target'] | 'auto' }
 const source = element<HTMLSelectElement>('panel-source');
 const target = element<HTMLSelectElement>('panel-target');
 populateLanguageSelect(source, true);
@@ -32,6 +34,45 @@ let translated = '';
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let targetOverridden = false;
 let sourceOverridden = false;
+let incoming: ReadingDraft | undefined;
+let readingBusy = false;
+let readingTimer: ReturnType<typeof setInterval> | undefined;
+const images = new ImageAttachment(error => {
+  if (error) feedback(message, error, 'error');
+  render();
+});
+element('image-remove').addEventListener('click', () => { stop(false); images.clear(); translated = ''; failedSnapshot = resultSnapshot = undefined; render(); });
+const pasteImage = (event: ClipboardEvent): void => {
+  const item = Array.from(event.clipboardData?.items ?? []).find(item => item.kind === 'file' && item.type.startsWith('image/'));
+  const file = item?.getAsFile();
+  if (!file) return;
+  event.preventDefault(); stop(false); textInput.value = ''; translated = ''; failedSnapshot = resultSnapshot = undefined; targetOverridden = false;
+  feedback(message, ''); void images.load(file);
+};
+document.addEventListener('paste', pasteImage);
+
+function applyIncoming(): void {
+  if (!incoming || disposed || document.hidden) return;
+  const draft = incoming; incoming = undefined;
+  if (draft.kind === 'error') { stop(false); feedback(message, draft.message, 'error'); return; }
+  stop(false); images.clear(); textInput.value = draft.text; sourceOverridden = targetOverridden = false;
+  textInput.dispatchEvent(new Event('input'));
+  // 右键菜单本身是主动翻译操作；没有授权或配置时仅保留选区并显示引导。
+  if (settings?.dataNoticeAccepted && resolvePreferences(selection(), settings)) void translate();
+}
+async function takeReading(): Promise<void> {
+  if (disposed || document.hidden || readingBusy || !settings || !chrome.windows?.getCurrent) return;
+  readingBusy = true;
+  try {
+    const current = await chrome.windows.getCurrent();
+    if (current.id === undefined || disposed || document.hidden) return;
+    const response = await send<ReadingDraft | null>({ type: 'TAKE_READING_DRAFT', windowId: current.id });
+    if (disposed || !response.ok || !response.value) return;
+    incoming = response.value;
+    applyIncoming();
+  } catch { /* 窗口关闭或扩展更新时不读取其他窗口，也不自动重放内容。 */ }
+  finally { readingBusy = false; }
+}
 
 /** 侧栏选择只属于此侧栏，不通过保存设置改写全局偏好。 */
 function selection(): TranslationSelection {
@@ -40,27 +81,30 @@ function selection(): TranslationSelection {
 
 /** 纯文本渲染结果与反馈，服务返回内容不能创建可执行节点。 */
 function render(): void {
-  const count = unicodeLength(textInput.value);
+  const hasImage = images.hasContent();
+  const count = hasImage ? 0 : unicodeLength(textInput.value);
   const overLimit = count > SELECTION_LIMIT;
-  const resolved = settings ? resolvePreferences(selection(), settings) : undefined;
+  const resolved = settings ? hasImage ? settings.services.bailian.configured ? { provider: 'bailian', source: 'auto', target: target.value } : undefined : resolvePreferences(selection(), settings) : undefined;
   const accepted = Boolean(settings?.dataNoticeAccepted);
   source.disabled = target.disabled = busy || !settings;
+  if (hasImage) source.disabled = true;
+  textInput.hidden = hasImage;
   textInput.disabled = busy;
-  translateButton.disabled = busy || !settings || !resolved || !accepted || !textInput.value.trim() || overLimit;
-  translateButton.textContent = busy ? activeRequest ? '正在翻译…' : '准备翻译…' : '翻译文本';
+  translateButton.disabled = busy || images.loading || !settings || !resolved || !accepted || !hasImage && !textInput.value.trim() || overLimit;
+  translateButton.textContent = busy ? activeRequest ? '正在翻译…' : '准备翻译…' : hasImage ? '翻译图片' : '翻译文本';
   stopButton.disabled = !busy;
-  clearButton.disabled = !busy && !textInput.value && !translated && !failedSnapshot;
+  clearButton.disabled = !busy && !hasImage && !images.loading && !textInput.value && !translated && !failedSnapshot;
   copyButton.disabled = busy || !translated;
   retryButton.hidden = !failedSnapshot;
   retryButton.disabled = busy;
-  element('panel-count').textContent = `${count} / ${SELECTION_LIMIT} 字符`;
+  element('panel-count').textContent = hasImage ? '图片附件' : `${count} / ${SELECTION_LIMIT} 字符`;
   element('panel-count').dataset.over = String(overLimit);
   textInput.setAttribute('aria-invalid', String(overLimit));
   element('panel-input-hint').hidden = !overLimit;
   element('panel-input-hint').textContent = overLimit ? `已超出 ${count - SELECTION_LIMIT} 个字符，请缩短后翻译。` : '';
   element('panel-setup').hidden = !settings || (accepted && Boolean(resolved));
   element('panel-setup-title').textContent = !accepted ? '先了解文本如何使用' : '先配置翻译服务';
-  element('panel-setup-detail').textContent = !accepted ? '请在设置页确认数据使用说明后开始翻译。' : '请先在设置中配置一个翻译服务。';
+  element('panel-setup-detail').textContent = !accepted ? '请在设置页确认数据使用说明后开始翻译。' : hasImage ? '图片翻译需要在设置中配置百炼，默认模型为 qwen3-vl-plus。' : '请先在设置中配置一个翻译服务。';
   output.textContent = translated;
   output.hidden = !translated;
   element('panel-empty').hidden = !busy || Boolean(translated);
@@ -89,11 +133,14 @@ async function refreshSettings(initial = false): Promise<void> {
 
 /** 新任务先读取最新配置，失败重试则保留原文本与服务快照。 */
 async function translate(snapshot?: TranslationSnapshot): Promise<void> {
-  if (busy || disposed) return;
+  if (busy || disposed || images.loading) return;
+  let image: string | undefined;
+  try { image = snapshot?.image ?? (images.hasContent() ? images.prepare() : undefined); }
+  catch { feedback(message, '图片处理失败，请粘贴更小的截图后重试。', 'error'); return; }
   const rawText = snapshot?.text ?? textInput.value;
   const chosen = selection();
-  if (!rawText.trim()) { feedback(message, '请先输入需要翻译的文本。', 'error'); return; }
-  if (unicodeLength(rawText) > SELECTION_LIMIT) { feedback(message, `文本不能超过 ${SELECTION_LIMIT} 个字符，请缩短后重试。`, 'error'); return; }
+  if (!image && !rawText.trim()) { feedback(message, '请先输入需要翻译的文本。', 'error'); return; }
+  if (!image && unicodeLength(rawText) > SELECTION_LIMIT) { feedback(message, `文本不能超过 ${SELECTION_LIMIT} 个字符，请缩短后重试。`, 'error'); return; }
   const version = versions.begin();
   busy = true;
   translated = '';
@@ -106,7 +153,7 @@ async function translate(snapshot?: TranslationSnapshot): Promise<void> {
   if (!current.ok) { busy = false; failedSnapshot = snapshot; feedback(message, current.error.message, 'error'); render(); return; }
   settings = current.value;
   if (!settings.dataNoticeAccepted) { busy = false; failedSnapshot = snapshot; feedback(message, '请先在设置中确认数据使用说明。', 'error'); render(); return; }
-  const preferences = snapshot?.preferences ?? resolvePreferences(chosen, settings);
+  const preferences = snapshot?.preferences ?? (image ? { provider: 'bailian' as const, source: 'auto' as const, target: chosen.target } : resolvePreferences(chosen, settings));
   if (!preferences || !settings.services[preferences.provider].configured) {
     busy = false;
     failedSnapshot = snapshot;
@@ -114,11 +161,11 @@ async function translate(snapshot?: TranslationSnapshot): Promise<void> {
     render();
     return;
   }
-  const captured: TranslationSnapshot = { preferences: { ...preferences }, text: rawText.trim() };
+  const captured: TranslationSnapshot = { preferences: { ...preferences }, text: rawText.trim(), image, imageTarget: snapshot?.imageTarget ?? (targetOverridden ? chosen.target : 'auto') };
   const requestId = crypto.randomUUID();
   activeRequest = { id: requestId, version, preferences: captured.preferences };
   render();
-  const response = await channel.send({ type: 'TRANSLATE_PANEL', requestId, preferences: captured.preferences, text: captured.text });
+  const response = await channel.send(image ? { type: 'TRANSLATE_IMAGE', requestId, image, target: captured.imageTarget!, operation: 'translate', imageConsent: true } : { type: 'TRANSLATE_PANEL', requestId, preferences: captured.preferences, text: captured.text });
   if (!versions.isCurrent(version) || activeRequest?.id !== requestId) return;
   activeRequest = undefined;
   busy = false;
@@ -129,6 +176,10 @@ async function translate(snapshot?: TranslationSnapshot): Promise<void> {
     failedSnapshot = captured;
     feedback(message, '服务未返回有效译文，请重试。', 'error');
   } else {
+    if (image && response.value.recognized) {
+      textInput.value = response.value.recognized;
+      if (captured.imageTarget === 'auto') target.value = captured.preferences.target = defaultTargetForText(response.value.recognized);
+    }
     translated = response.value.translated;
     resultSnapshot = captured;
     feedback(message, '');
@@ -152,6 +203,7 @@ stopButton.addEventListener('click', () => stop());
 retryButton.addEventListener('click', () => { if (failedSnapshot) void translate(failedSnapshot); });
 clearButton.addEventListener('click', () => {
   stop(false);
+  images.clear();
   textInput.value = '';
   targetOverridden = false;
   sourceOverridden = false;
@@ -191,6 +243,7 @@ element('panel-setup-button').addEventListener('click', () => {
 const refreshOnFocus = (): void => { void refreshSettings(); };
 const refreshOnVisible = (): void => {
   if (document.hidden) {
+    if (images.loading) images.clear();
     // 原生侧栏收起时不一定卸载文档；准备中和已发出的任务都必须立即失效。
     if (busy) {
       stop(false);
@@ -200,6 +253,7 @@ const refreshOnVisible = (): void => {
     return;
   }
   void refreshSettings();
+  applyIncoming();
 };
 window.addEventListener('focus', refreshOnFocus);
 document.addEventListener('visibilitychange', refreshOnVisible);
@@ -210,10 +264,14 @@ window.addEventListener('pagehide', () => {
   activeRequest = undefined;
   if (requestId) void channel.send({ type: 'CANCEL_PANEL', requestId });
   channel.dispose();
+  images.dispose(); incoming = undefined;
+  document.removeEventListener('paste', pasteImage);
+  if (readingTimer) clearInterval(readingTimer);
   if (refreshTimer) clearInterval(refreshTimer);
   window.removeEventListener('focus', refreshOnFocus);
   document.removeEventListener('visibilitychange', refreshOnVisible);
 }, { once: true });
 render();
-void refreshSettings(true);
+void refreshSettings(true).then(() => takeReading());
+readingTimer = setInterval(() => { void takeReading(); }, 1000);
 refreshTimer = setInterval(() => { if (!document.hidden && !busy) void refreshSettings(); }, 2500);

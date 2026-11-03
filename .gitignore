@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-firefox/
 release/
 coverage/
 
@@ -17,4 +18,5 @@ Desktop.ini
 
 # 扩展打包产物
 *.crx
+*.xpi
 *.zip

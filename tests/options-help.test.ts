@@ -24,7 +24,7 @@ beforeEach(() => {
     if (message.type === 'SAVE_SETTINGS' && message.pageDisplayMode) settings.pageDisplayMode = message.pageDisplayMode;
     return { ok: true, value: structuredClone(settings) };
   });
-  vi.stubGlobal('chrome', { runtime: { sendMessage: request }, permissions: { request: vi.fn(async () => false) } });
+  vi.stubGlobal('chrome', { runtime: { sendMessage: request }, permissions: { request: vi.fn(async () => false) }, commands: { getAll: vi.fn(async () => [{ name: 'capture-reading', shortcut: 'Ctrl+Shift+Y' }]) }, tabs: { create: vi.fn(async () => ({})) } });
 });
 
 afterEach(() => {
@@ -57,6 +57,15 @@ function node<T extends HTMLElement = HTMLElement>(id: string): T { return docum
 function helpButton(provider: string): HTMLButtonElement { return document.querySelector(`[data-service-help="${provider}"]`) as HTMLButtonElement; }
 
 describe('设置页配置帮助', () => {
+  it('快捷键区域显示浏览器实际绑定并提供修改入口，返回后刷新', async () => {
+    await load(); await vi.waitFor(() => expect(node<HTMLInputElement>('region-shortcut').value).toBe('Ctrl+Shift+Y'));
+    expect(node('shortcuts').contains(node('hover-shortcut'))).toBe(true);
+    await vi.waitFor(() => expect(node<HTMLButtonElement>('edit-region-shortcut').disabled).toBe(false));
+    node('edit-region-shortcut').click(); expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'chrome://extensions/shortcuts' });
+    (chrome.commands.getAll as unknown as { mockResolvedValue(value: unknown): void }).mockResolvedValue([{ name: 'capture-reading', shortcut: 'Alt+Shift+J' }]);
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(node<HTMLInputElement>('region-shortcut').value).toBe('Alt+Shift+J'));
+  });
   it('展示四种页面模式，悬停翻译默认关闭并支持直接录入自定义组合键', async () => {
     await load();
     const mode = node<HTMLSelectElement>('page-display-mode');
@@ -85,7 +94,7 @@ describe('设置页配置帮助', () => {
     expect(node<HTMLDialogElement>('service-help-dialog').open).toBe(true);
     expect(node('service-help-title').textContent).toBe('百炼大模型 · 配置帮助');
     expect(node('service-help-content').textContent).toContain('完整请求地址，不是 Base URL');
-    expect(node('service-help-content').textContent).toContain('qwen-plus');
+    expect(node('service-help-content').textContent).toContain('qwen3-vl-plus');
     expect(node('service-help-content').textContent).not.toContain('尚未保存的模型');
     expect(node('service-help-content').textContent).not.toContain('<FAKE_API_KEY_FOR_TEST>');
     node('service-help-close').click();

@@ -86,6 +86,23 @@ async function within<T>(operation: Promise<T>): Promise<T> {
 beforeEach(() => { vi.stubGlobal('crypto', webcrypto); });
 
 describe('后台来源与隐私边界', () => {
+  it('新安装默认视觉模型，旧默认值只迁移一次，自定义模型保持不变', async () => {
+    const { app, api, local } = await configured();
+    const saved = local.yebanSettings as { visionDefaultMigrated?: boolean; services: { bailian: { model: string; version: number } } };
+    delete saved.visionDefaultMigrated;
+    const migrated = new BackgroundApp(api, vi.fn()); await migrated.ready;
+    expect(await migrated.handle({ type: 'GET_SETTINGS' }, optionSender)).toMatchObject({ ok: true, value: { services: { bailian: { model: 'qwen3-vl-plus' } } } });
+    await migrated.handle({ type: 'SAVE_SETTINGS', provider: 'bailian', config: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus' } }, optionSender);
+    const restarted = new BackgroundApp(api, vi.fn()); await restarted.ready;
+    expect(await restarted.handle({ type: 'GET_SETTINGS' }, optionSender)).toMatchObject({ ok: true, value: { services: { bailian: { model: 'qwen-plus' } } } });
+    const custom = local.yebanSettings as typeof saved; delete custom.visionDefaultMigrated; custom.services.bailian.model = 'virtual-custom-vision';
+    const preserved = new BackgroundApp(api, vi.fn()); await preserved.ready;
+    expect(await preserved.handle({ type: 'GET_SETTINGS' }, optionSender)).toMatchObject({ ok: true, value: { services: { bailian: { model: 'virtual-custom-vision' } } } });
+    const fresh = new BackgroundApp(createMock().api, vi.fn()); await fresh.ready;
+    expect(await fresh.handle({ type: 'GET_SETTINGS' }, optionSender)).toMatchObject({ ok: true, value: { services: { bailian: { model: 'qwen3-vl-plus' } } } });
+    void app;
+  });
+
   it('连接测试无需正文发送确认，只发送固定示例文本', async () => {
     const { app, fetcher } = await configured();
     expect((await app.handle({ type: 'SAVE_SETTINGS', dataNoticeAccepted: false }, optionSender)).ok).toBe(true);

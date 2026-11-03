@@ -1,6 +1,6 @@
 {
   "name": "yeban-translate",
-  "version": "0.4.4",
+  "version": "0.4.7",
   "private": true,
   "type": "module",
   "description": "页伴翻译：网页双语与点击划词翻译",

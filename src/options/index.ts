@@ -373,6 +373,20 @@ hoverShortcut.addEventListener('keydown', event => {
   void saveHoverShortcut(shortcut);
 });
 element('reset-hover-shortcut').addEventListener('click', () => { void saveHoverShortcut(DEFAULT_HOVER_SHORTCUT); });
+/** 选区快捷键属于浏览器命令，扩展只能读取，修改由浏览器快捷键页面完成。 */
+async function refreshRegionShortcut(): Promise<void> {
+  try {
+    const commands = await chrome.commands.getAll();
+    element<HTMLInputElement>('region-shortcut').value = commands.find(command => command.name === 'capture-reading')?.shortcut || '未设置';
+  } catch { element<HTMLInputElement>('region-shortcut').value = '无法读取，请打开浏览器快捷键设置'; }
+}
+element('edit-region-shortcut').addEventListener('click', () => {
+  const scheme = navigator.userAgent.includes('Edg/') ? 'edge' : 'chrome';
+  void chrome.tabs.create({ url: `${scheme}://extensions/shortcuts` }).catch(() => feedback(globalFeedback, '无法打开快捷键页面，请从浏览器扩展管理页面进入快捷键设置。', 'error'));
+});
+window.addEventListener('focus', () => { void refreshRegionShortcut(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshRegionShortcut(); });
+void refreshRegionShortcut();
 element('grant-all-sites').addEventListener('click', () => {
   if (busy || !settings) return;
   const permissionRequest = chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] });

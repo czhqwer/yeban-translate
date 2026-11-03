@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>页伴 · 原位框选模拟验收</title>
+<script src="/ui-preview.js"></script><script src="/region.js" defer></script>
+<style>
+body { margin:0; background:#eceee9; color:#222; font:18px/1.6 Georgia,serif; }
+header { padding:22px max(24px,calc((100vw - 860px)/2)); background:#f8f6f0; display:flex; gap:20px; align-items:center; font:14px/1.5 system-ui; }
+button { padding:10px 18px; border:0; border-radius:10px; background:#246650; color:white; cursor:pointer; white-space:nowrap; }
+article { max-width:760px; min-height:900px; padding:50px; margin:30px auto; background:white; }
+h1 { font-size:28px; text-align:center; } h2 { font-size:22px; } p { margin:16px 0; }
+.dark { padding:20px; background:#22342f; color:#eef2ef; }
+</style></head>
+<body><header><button id="preview-region-start">开始框选</button><span>也可按 Alt+Shift+S。仅模拟加载与返回结果，不截图、不上传。</span></header>
+<article><h1>A Paper About Reading</h1><p style="text-align:center">Local demonstration · No external API</p><h2>Abstract</h2>
+<p>Reading brings ideas closer. Translate only the region you need. Keep formulas and citations unchanged [1]. This paragraph is a local fixture for checking the selection overlay and its typography.</p>
+<h2>1. Introduction</h2><p>The translation should appear where you selected the text. A simple paper background can be covered by a matching surface, while complex illustrations are better served by a readable card.</p>
+<p class="dark">A dark reading region uses light text. Closing the overlay reveals the unchanged original content.</p>
+<h2>2. Results</h2><p>Use Escape to cancel. Scroll the document to dismiss the old overlay. Scrolling inside a result card should keep it open.</p></article></body></html>

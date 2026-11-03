@@ -13,7 +13,7 @@ const serviceHelp: Record<ProviderId, { title: string; steps: string[]; fields: 
     fields: [
       ['API Key', '填写百炼为所选地域创建的 API Key。'],
       ['官方 API 端点', '填写完整请求地址，不是 Base URL。中国内地（北京）示例：https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'],
-      ['模型', '填写模型名称，例如 qwen-plus；须在所选地域可用。'],
+      ['模型', '默认 qwen3-vl-plus，文本与图片共用此模型；其他模型需支持图像输入，并在所选地域可用。'],
     ],
     links: [['百炼：获取 API Key 与地域说明', 'https://help.aliyun.com/zh/model-studio/get-api-key']],
   },

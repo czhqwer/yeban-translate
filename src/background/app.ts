@@ -1,7 +1,8 @@
 import { DEFAULT_HOVER_SHORTCUT, DEFAULT_PAGE_DISPLAY_MODE, DEFAULT_PREFERENCES, DEFAULT_SERVICES, SELECTION_LIMIT } from '../shared/types';
 import type { BackgroundMessage, ContentMessage, PageContext, PageDisplayMode, Preferences, ProviderId, PublicSettings, Reply, ServiceInput, SidePanelState, TranslationMode } from '../shared/types';
 import { cancelled, failure, invalid, TranslationError } from './errors';
-import { isConfigured, mergeService, translate, type ServiceConfig } from './providers';
+import { isConfigured, mergeService, translate, translateImage, type ServiceConfig } from './providers';
+import { imageDimensions } from '../shared/image';
 import { RequestPool } from './pool';
 import { DEFAULT_PRIORITY, normalizePriority, resolveProvider } from '../shared/services';
 import { PANEL_PORT_NAME, type PanelCommand, type PanelResponse } from '../shared/panel';
@@ -11,6 +12,7 @@ import { isLanguageCode, isSourceLanguage } from '../shared/languages';
 import { normalizeShortcut } from '../shared/shortcuts';
 
 interface StoredSettings {
+  visionDefaultMigrated?: boolean;
   preferences: Preferences;
   services: Record<ProviderId, ServiceConfig>;
   sites: string[];
@@ -127,6 +129,14 @@ export class BackgroundApp {
     this.settings.pageDisplayMode = stored?.pageDisplayMode && ['bilingual', 'translation', 'hover', 'parallel'].includes(stored.pageDisplayMode) ? stored.pageDisplayMode : DEFAULT_PAGE_DISPLAY_MODE;
     this.settings.hoverTranslationEnabled = stored?.hoverTranslationEnabled === true;
     this.settings.hoverShortcut = normalizeShortcut(stored?.hoverShortcut ?? '') ?? DEFAULT_HOVER_SHORTCUT;
+    // 仅迁移旧版默认值一次；其他自定义模型和迁移后主动选回的模型均保留。
+    if (!this.settings.visionDefaultMigrated) {
+      if (!this.settings.services.bailian.model || this.settings.services.bailian.model === 'qwen-plus') {
+        this.settings.services.bailian.model = DEFAULT_SERVICES.bailian.model;
+        this.settings.services.bailian.version++;
+      }
+      this.settings.visionDefaultMigrated = true;
+    }
     const prior = (await this.api.storage.session.get(CONTROL))[CONTROL] as ControlState | undefined;
     this.controls = prior ?? { jobs: {}, cooldown: { bailian: 0, aliyun: 0 }, revisions: { bailian: 0, aliyun: 0 } };
     // Worker 重启不恢复请求正文，也不重放结果未知的请求。
@@ -147,7 +157,7 @@ export class BackgroundApp {
 
   private trusted(sender: chrome.runtime.MessageSender): 'options' | 'popup' | 'sidepanel' | null {
     if (sender.id !== this.api.runtime.id) return null;
-    if (sender.url === this.api.runtime.getURL('options.html')) return 'options';
+    if (sender.url?.split('#')[0] === this.api.runtime.getURL('options.html')) return 'options';
     if (sender.url === this.api.runtime.getURL('popup.html')) return 'popup';
     if (sender.url === this.api.runtime.getURL('sidepanel.html')) return 'sidepanel';
     return null;
@@ -223,17 +233,22 @@ export class BackgroundApp {
         const raw = (value as { message?: unknown }).message;
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid();
         const command = raw as Record<string, unknown>;
-        if (command.type !== 'TRANSLATE_PANEL' && command.type !== 'CANCEL_PANEL') throw new TranslationError('FORBIDDEN', '侧栏连接仅允许翻译和取消操作。');
-        const fields = command.type === 'TRANSLATE_PANEL' ? ['type', 'requestId', 'preferences', 'text'] : ['type', 'requestId'];
+        if (command.type !== 'TRANSLATE_PANEL' && command.type !== 'TRANSLATE_IMAGE' && command.type !== 'CANCEL_PANEL') throw new TranslationError('FORBIDDEN', '侧栏连接仅允许翻译和取消操作。');
+        const fields = command.type === 'TRANSLATE_PANEL' ? ['type', 'requestId', 'preferences', 'text'] : command.type === 'TRANSLATE_IMAGE' ? ['type', 'requestId', 'image', 'target', 'operation', 'imageConsent'] : ['type', 'requestId'];
         if (Object.keys(command).some(field => !fields.includes(field))) invalid();
         const requestId = identifier(command.requestId);
         let message: PanelCommand = { type: 'CANCEL_PANEL', requestId };
         if (command.type === 'TRANSLATE_PANEL') {
           if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > SELECTION_LIMIT * 2 || Array.from(command.text).length > SELECTION_LIMIT) invalid('请输入 1 至 2000 个字符的待翻译文本。');
           message = { type: 'TRANSLATE_PANEL', requestId, text: command.text, preferences: preferences(command.preferences) };
+        } else if (command.type === 'TRANSLATE_IMAGE') {
+          try { imageDimensions(command.image); } catch { invalid('图片无效或过大，请重新选择。'); }
+          if (command.target !== 'auto' && !isLanguageCode(command.target) || !['translate', 'recognize'].includes(String(command.operation))) invalid();
+          if (command.imageConsent !== true) throw new TranslationError('CONSENT', '请确认图片发送说明。');
+          message = command as unknown as Extract<PanelCommand, { type: 'TRANSLATE_IMAGE' }>;
         }
         // 翻译等待者不能占用取消通道；控制消息单独限额，滥用时断连清理全部请求。
-        if (message.type === 'TRANSLATE_PANEL' && pending.size - controlsPending.size >= 16) {
+        if (message.type !== 'CANCEL_PANEL' && pending.size - controlsPending.size >= 16) {
           send(messageId, failure(new TranslationError('QUEUE_FULL', '侧栏待处理翻译过多，请稍后重试。', true)));
           return;
         }
@@ -670,34 +685,56 @@ export class BackgroundApp {
   }
 
   /** 侧栏翻译只依赖自身文档和服务配置，不读取网页，也不要求网页主机授权。 */
-  private async enqueuePanel(message: Extract<BackgroundMessage, { type: 'TRANSLATE_PANEL' }>, ownerId: string, ownerActive: () => boolean = () => true): Promise<{ promise: Promise<{ translated: string }> }> {
+  /** 只由后台建立的框选会话调用；网页消息不能直接调用此入口。 */
+  async imageReadiness(): Promise<void> {
+    await this.ready;
+    if (!this.settings.dataNoticeAccepted) throw new TranslationError('CONSENT', '请先在设置页确认数据使用说明。');
+    if (!isConfigured('bailian', this.settings.services.bailian)) throw new TranslationError('CONFIG', '请先在设置页配置百炼，默认模型为 qwen3-vl-plus。');
+  }
+
+  async translateRegion(image: string, signal: AbortSignal, guard: () => Promise<void>): Promise<{ translated: string }> {
+    await this.imageReadiness();
+    imageDimensions(image);
+    const ownerId = `region:${crypto.randomUUID()}`;
+    const cancel = () => this.cancelPanel(ownerId);
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      const request = await this.exclusive(() => this.enqueuePanel({ type: 'TRANSLATE_IMAGE', requestId: crypto.randomUUID(), image, target: 'auto', operation: 'translate', imageConsent: true }, ownerId, () => !signal.aborted, guard));
+      return await request.promise;
+    } finally { signal.removeEventListener('abort', cancel); }
+  }
+
+  private async enqueuePanel(message: Exclude<PanelCommand, { type: 'CANCEL_PANEL' }>, ownerId: string, ownerActive: () => boolean = () => true, guard?: () => Promise<void>): Promise<{ promise: Promise<{ translated: string }> }> {
     if (!ownerActive()) throw cancelled();
     const id = identifier(message.requestId);
-    const prefs = preferences(message.preferences);
-    if (typeof message.text !== 'string' || !message.text.trim() || Array.from(message.text).length > SELECTION_LIMIT) invalid('请输入 1 至 2000 个字符的待翻译文本。');
+    const prefs: Preferences = message.type === 'TRANSLATE_IMAGE' ? { provider: 'bailian', source: 'auto', target: message.target === 'auto' ? 'zh' : message.target } : preferences(message.preferences);
+    if (message.type === 'TRANSLATE_PANEL' && (typeof message.text !== 'string' || !message.text.trim() || Array.from(message.text).length > SELECTION_LIMIT)) invalid('请输入 1 至 2000 个字符的待翻译文本。');
+    const identity = JSON.stringify(message);
     if (!this.settings.dataNoticeAccepted) throw new TranslationError('CONSENT', '请先在设置页确认文本发送说明。');
     const config = { ...this.settings.services[prefs.provider] };
     if (!isConfigured(prefs.provider, config)) throw new TranslationError('CONFIG', '请先在设置页配置当前翻译服务。');
     const name = `panel/${ownerId}/${id}`;
     const existing = this.panels.get(name);
     if (existing && !existing.stopped) {
-      if (existing.text !== message.text) invalid('同一请求标识的文本已变化，请重新翻译。');
+      if (existing.text !== identity) invalid('同一请求标识的内容已变化，请重新翻译。');
       return { promise: existing.promise };
     }
     this.cancelPanel(ownerId);
     if (this.panels.size >= 100) throw new TranslationError('QUEUE_FULL', '侧栏待翻译请求过多，请稍后重试。', true);
-    const entry = { name, ownerId, id, provider: prefs.provider, version: config.version, text: message.text, stopped: false } as PanelRequest;
+    const entry = { name, ownerId, id, provider: prefs.provider, version: config.version, text: identity, stopped: false } as PanelRequest;
     const check = async () => {
+      await guard?.();
       if (!ownerActive() || entry.stopped || this.panels.get(name) !== entry || this.settings.services[prefs.provider].version !== config.version) throw cancelled();
       if (!this.settings.dataNoticeAccepted) throw new TranslationError('CONSENT', '文本发送授权已关闭，请重新确认。');
       if (this.controls.cooldown[prefs.provider] > Date.now()) throw new TranslationError('RATE_LIMIT', '服务正在冷却，请稍后重试。', true);
     };
     entry.promise = this.pools[prefs.provider].enqueue(name, 'selection', async signal => {
       try {
-        const translated = await translate(config, prefs, message.text, { signal, fetcher: this.fetcher, beforeRequest: check });
+        const options = { signal, fetcher: this.fetcher, beforeRequest: check };
+        const result = message.type === 'TRANSLATE_IMAGE' ? await translateImage(config, message, options) : { translated: await translate(config, prefs, message.text, options) };
         await check();
         if (signal.aborted) throw cancelled();
-        return { translated };
+        return result;
       } catch (error) { await this.serviceFailure(prefs.provider, error); throw error; }
     });
     this.panels.set(name, entry);

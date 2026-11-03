@@ -32,6 +32,16 @@ let initialized = false;
 let disposed = false;
 let pageStatus: PageStatus = { state: 'idle', completed: 0, failed: 0, pending: 0 };
 let pollTimer: ReturnType<typeof setInterval> | undefined;
+void chrome.commands?.getAll().then(commands => { element('capture-shortcut').textContent = commands.find(command => command.name === 'capture-reading')?.shortcut || '未设置快捷键'; }).catch(() => { element('capture-shortcut').textContent = '快捷键不可用'; });
+element('capture-reading').addEventListener('click', async () => {
+  if (tabId === undefined) { feedback(actionFeedback, '请先打开需要翻译的标签页。', 'error'); return; }
+  const button = element<HTMLButtonElement>('capture-reading');
+  button.disabled = true;
+  const response = await send({ type: 'CAPTURE_READING', tabId });
+  if (!response.ok) feedback(actionFeedback, response.error.message, 'error');
+  else window.close();
+  button.disabled = false;
+});
 
 /** 弹窗只调整当前页语言；服务始终按设置页的最新优先级自动选择。 */
 function selection(): TranslationSelection {

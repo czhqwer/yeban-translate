@@ -88,6 +88,8 @@ export interface BeginJobResult {
 
 export interface TranslationResult {
   translated: string;
+  /** 图片识别得到的原文；纯文本翻译不返回此字段。 */
+  recognized?: string;
 }
 
 export type Reply<T> = { ok: true; value: T } | { ok: false; error: AppError };
@@ -120,6 +122,9 @@ export type BackgroundMessage =
   | { type: 'GET_SIDE_PANEL_STATE'; tabId?: number }
   | { type: 'SET_SIDE_PANEL'; open: boolean; tabId?: number; windowId?: number }
   | { type: 'TRANSLATE_PANEL'; requestId: string; preferences: Preferences; text: string }
+  | { type: 'TRANSLATE_IMAGE'; requestId: string; image: string; target: TargetLanguage | 'auto'; operation: 'translate' | 'recognize'; imageConsent: true }
+  | { type: 'CAPTURE_READING'; tabId: number }
+  | { type: 'TAKE_READING_DRAFT'; windowId: number }
   | { type: 'CANCEL_PANEL'; requestId: string }
   | { type: 'BEGIN_JOB'; mode: TranslationMode; jobId: string; preferences: Preferences }
   | { type: 'TRANSLATE'; mode: TranslationMode; jobId: string; itemId: string; text: string }
@@ -141,7 +146,7 @@ export type ContentMessage =
 export const DEFAULT_PREFERENCES: Preferences = { provider: 'aliyun', source: 'auto', target: 'zh' };
 export const PROVIDER_NAMES: Record<ProviderId, string> = { bailian: '百炼大模型', aliyun: '阿里云机器翻译' };
 export const DEFAULT_SERVICES: Record<ProviderId, PublicService> = {
-  bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', configured: false },
+  bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3-vl-plus', configured: false },
   aliyun: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', configured: false },
 };
 export const SELECTION_LIMIT = 2000;

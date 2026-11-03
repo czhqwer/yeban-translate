@@ -93,7 +93,7 @@ export class PanelChannel {
     const reply = value as Partial<PanelReply>;
     if (reply.ok === true) {
       if (reply.value === null) return { ok: true, value: null };
-      if (reply.value && typeof reply.value.translated === 'string') return { ok: true, value: { translated: reply.value.translated } };
+      if (reply.value && typeof reply.value.translated === 'string' && reply.value.translated.length <= 16000 && (reply.value.recognized === undefined || typeof reply.value.recognized === 'string' && reply.value.recognized.length <= 16000)) return { ok: true, value: { translated: reply.value.translated, ...(reply.value.recognized === undefined ? {} : { recognized: reply.value.recognized }) } };
       return;
     }
     if (reply.ok !== false || !reply.error || typeof reply.error.code !== 'string' || typeof reply.error.retryable !== 'boolean') return;
@@ -101,6 +101,7 @@ export class PanelChannel {
       AUTH: '服务凭据无效，请在设置中检查配置。',
       QUOTA: '服务额度不足，请检查服务用量。',
       CONFIG: '翻译服务配置不可用，请在设置中检查。',
+      SERVICE_REQUEST: '服务不支持此次请求，请检查视觉模型名称、地域和图片格式。',
       CONSENT: '请先在设置中确认文本发送说明。',
       RATE_LIMIT: '服务请求过于频繁，请稍后重试。',
       COOLDOWN: '服务正在等待限流恢复，请稍后重试。',

@@ -12,7 +12,7 @@ await build({
   root, configFile: false, base: './',
   build: { outDir, emptyOutDir: true, sourcemap: false, rollupOptions: { input: { popup: resolve(root, 'popup.html'), options: resolve(root, 'options.html'), sidepanel: resolve(root, 'sidepanel.html') } } },
 });
-for (const [entry, format, filename] of [['src/content/index.ts', 'iife', 'content.js'], ['src/background/index.ts', 'es', 'background.js']]) {
+for (const [entry, format, filename] of [['src/content/index.ts', 'iife', 'content.js'], ['src/content/region-entry.ts', 'iife', 'region.js'], ['src/background/index.ts', 'es', 'background.js']]) {
   await build({
     root, configFile: false, publicDir: false,
     build: { outDir, emptyOutDir: false, sourcemap: false, lib: { entry: resolve(root, entry), name: 'YeBan', formats: [format], fileName: () => filename } },
@@ -26,7 +26,8 @@ const manifest = {
   version,
   description: '一页双语，随手即译。支持网页多模式翻译、点击划词、编辑器回写、快捷键悬停翻译和文本侧栏。',
   minimum_chrome_version: '116',
-  permissions: ['activeTab', 'scripting', 'storage', 'sidePanel'],
+  permissions: ['activeTab', 'scripting', 'storage', 'sidePanel', 'contextMenus'],
+  commands: { 'capture-reading': { suggested_key: { default: 'Alt+Shift+S' }, description: '在当前页面框选，松开鼠标翻译' } },
   host_permissions: [
     'https://dashscope.aliyuncs.com/*',
     'https://dashscope-intl.aliyuncs.com/*',
@@ -37,7 +38,8 @@ const manifest = {
     'https://*.eu-central-1.maas.aliyuncs.com/*',
     'https://mt.cn-hangzhou.aliyuncs.com/*',
   ],
-  optional_host_permissions: ['https://*/*', 'http://*/*'],
+  // 文件权限只用于用户主动截取本地 PDF；不为 file:// 注册内容脚本。
+  optional_host_permissions: ['https://*/*', 'http://*/*', 'file:///*'],
   background: { service_worker: 'background.js', type: 'module' },
   action: { default_title: '页伴翻译', default_popup: 'popup.html' },
   options_page: 'options.html',

@@ -139,6 +139,10 @@ html:has(body.sidepanel-body)::-webkit-scrollbar, body.sidepanel-body::-webkit-s
 .panel-result-footer button { flex: none; }
 .sidepanel-quote { margin-top: auto; padding: 34px 8px 4px; color: var(--muted); font-family: Georgia, "Noto Serif SC", "Microsoft YaHei", serif; font-size: 11px; line-height: 1.8; letter-spacing: .08em; text-align: center; }
 .sidepanel-quote::before { content: ""; display: block; width: 34px; height: 1px; margin: 0 auto 12px; background: var(--line); }
+.image-attachment { display: flex; align-items: flex-start; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.image-attachment img { width: 100px; max-height: 150px; object-fit: contain; border-radius: 6px; background: var(--wash); }
+.image-attachment p { margin: 0 0 8px; }
+.image-attachment > div { min-width: 0; }
 .provider-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .provider-help { min-height: 30px; padding: 5px 8px; font-size: 11px; color: var(--accent); background: transparent; }
 .provider-heading .provider-title { min-width: 0; }

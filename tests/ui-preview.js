@@ -5,7 +5,7 @@
   const settings = {
     preferences: { provider: 'aliyun', source: 'auto', target: 'zh' },
     services: {
-      bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', configured: !empty && !onlyAliyun },
+      bailian: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3-vl-plus', configured: !empty && !onlyAliyun },
       aliyun: { endpoint: 'https://mt.cn-hangzhou.aliyuncs.com', configured: !empty },
     },
     sites: [], dataNoticeAccepted: !empty, providerPriority: ['aliyun', 'bailian'], selectionEnabled: true,
@@ -20,6 +20,7 @@
   const panelState = { windowId: 1, open: false, ready: true, canOpen: true, canToggle: !new URL(location.href).searchParams.has('legacy'), version: 1 };
   const listeners = [];
   const jobs = new Map();
+  let readingDelivered = false;
   const ok = value => ({ ok: true, value });
   const copy = value => JSON.parse(JSON.stringify(value));
   window.chrome = {
@@ -58,6 +59,25 @@
       getURL: path => `${location.origin}/${path}`,
       openOptionsPage: async () => { location.href = '/options.html'; },
       sendMessage: async msg => {
+        if (msg.type === 'TAKE_READING_DRAFT') {
+          const kind = new URL(location.href).searchParams.get('reading');
+          if (readingDelivered || !kind) return ok(null);
+          readingDelivered = true;
+          if (kind === 'text') return ok({ id: 'virtual-reading', kind: 'text', text: 'Reading brings ideas closer.' });
+          return ok(null);
+        }
+        if (msg.type === 'REGION_CAPTURE') {
+          for (const listener of listeners) listener({ type: 'REGION_LOADING', token: msg.token }, { id: 'yeban-local-preview' }, () => {});
+          await new Promise(resolve => setTimeout(resolve, 1800));
+          return ok({ translated: '阅读，让思想更加贴近。只翻译你需要的区域，保留公式与引用编号 [1]。这是一段本地模拟译文，用于检查原位覆盖和排版效果。', style: { solid: true, background: 'rgb(255, 255, 255)', color: 'rgb(34, 34, 34)' } });
+        }
+        if (msg.type === 'REGION_SETTINGS') { location.href = '/options.html#privacy'; return ok(null); }
+        if (msg.type === 'REGION_CANCEL') return ok(null);
+        if (msg.type === 'TRANSLATE_IMAGE') {
+          jobs.set(msg.requestId, true); await new Promise(resolve => setTimeout(resolve, 700));
+          if (!jobs.has(msg.requestId)) return { ok: false, error: { code: 'CANCELED', message: '已停止。', retryable: false } };
+          return ok({ recognized: 'Reading brings ideas closer.\nKeep formulas and citations unchanged [1].', translated: msg.operation === 'recognize' ? '' : '阅读，让思想更加贴近。\n保留公式与引用编号不变 [1]。\n（以上为本地模拟结果）' });
+        }
         if (msg.type === 'GET_SETTINGS') return ok(copy(settings));
         if (msg.type === 'GET_CONTEXT') return ok({ preferences: copy(settings.preferences), services: copy(settings.services), providerPriority: [...settings.providerPriority], selectionEnabled: settings.selectionEnabled, pageDisplayMode: settings.pageDisplayMode, hoverTranslationEnabled: settings.hoverTranslationEnabled, hoverShortcut: settings.hoverShortcut, floatingEnabled: true, floatingPosition, dataNoticeAccepted: true, sidePanel: copy(panelState) });
         if (msg.type === 'SET_FLOATING_POSITION') {
@@ -118,6 +138,8 @@
         return ok(undefined);
       },
     },
+    commands: { getAll: async () => [{ name: 'capture-reading', shortcut: 'Alt+Shift+S' }] },
+    windows: { getCurrent: async () => ({ id: 1 }) },
     tabs: {
       create: async ({ url }) => { location.href = url; return { id: 2 }; },
       query: async () => [{ id: 1, windowId: 1, url: 'https://example.org/article', active: true }],
@@ -134,6 +156,9 @@
     permissions: { request: async () => !new URL(location.href).searchParams.has('deny'), contains: async () => settings.allSitesGranted, remove: async () => true },
   };
   window.addEventListener('DOMContentLoaded', () => {
+    const startRegion = () => { for (const listener of listeners) listener({ type: 'REGION_START', token: 'local-preview-region' }, { id: 'yeban-local-preview' }, () => {}); };
+    document.getElementById('preview-region-start')?.addEventListener('click', startRegion);
+    document.addEventListener('keydown', event => { if (event.altKey && event.shiftKey && event.code === 'KeyS') { event.preventDefault(); startRegion(); } });
     const note = document.createElement('div');
     note.id = 'preview-events';
     note.textContent = '本地界面验收 · 模拟响应 · 未调用真实 API';
